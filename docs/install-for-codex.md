@@ -114,4 +114,17 @@ codex features enable hooks
 sed -n '1,220p' "${CODEX_HOME:-$HOME/.codex}/hooks.json"
 ```
 
+If both checks are correct but the current session is running through HAPI,
+`codex app-server`, an API wrapper, or another non-interactive surface, that
+surface may not emit native Codex `Stop` events. After writing a
+`round-N-summary.md`, run the hook-equivalent gate explicitly from the project
+root instead of waiting for an automatic stop event:
+
+```bash
+"${CODEX_HOME:-$HOME/.codex}/skills/humanize/scripts/rlcr-stop-gate.sh" --project-root "$PWD"
+```
+
+Treat exit `10` as the normal blocked-hook path and continue from the returned
+instructions; exit `20` is a runtime/setup error.
+
 If the installer reports that your config or installed Codex still uses `codex_hooks`, upgrade Codex first or change `${CODEX_HOME:-~/.codex}/config.toml` to `[features]\nhooks = true`.

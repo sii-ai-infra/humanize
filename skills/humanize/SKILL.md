@@ -68,7 +68,13 @@ Transforms a rough draft document into a structured implementation plan with:
 "{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" --skip-impl
 ```
 
-After each round, write the required summary and stop/exit normally. Humanize's native Codex `Stop` hook handles review gating automatically.
+After each round, write the required summary and trigger the Humanize review gate. In a normal interactive Codex CLI session, stop/exit normally so the native Codex `Stop` hook runs automatically. In API/HAPI/app-server/skill workflow surfaces, or whenever a normal assistant stop did not run the hook, run the same gate explicitly:
+
+```bash
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/rlcr-stop-gate.sh" --project-root <task-root>
+```
+
+Treat exit `10` as a blocked hook result and follow its instructions; exit `20` is a runtime error. Do not report a round as complete before the hook/gate creates the review result or the next prompt.
 
 **Common Options:**
 - `--max N` - Maximum iterations before auto-stop (default: 42)
@@ -170,8 +176,9 @@ The RLCR loop uses a Goal Tracker to prevent goal drift:
 2. **Maintain Goal Tracker**: Keep goal-tracker.md up-to-date with progress
 3. **Be thorough**: Include details about implementation, files changed, tests added
 4. **No cheating**: Don't try to exit by editing state files or running cancel commands
-5. **Use the native Stop hook on Codex**: After writing the required summary, stop/exit normally so Codex runs the Humanize Stop hook
-6. **Trust the process**: External review helps improve implementation quality
+5. **Use the Humanize Stop gate**: After writing the required summary, rely on native Codex `Stop` hooks when the current surface emits them; otherwise immediately run `scripts/rlcr-stop-gate.sh --project-root <task-root>`. This wrapper invokes the same hook logic and is the required fallback for HAPI/API/app-server workflows.
+6. **No round-complete pauses**: A `round-N-summary.md` without `round-N-review-result.md` is not a completion point. Continue from the hook-generated next prompt until `COMPLETE`, a true blocker, or user interruption.
+7. **Trust the process**: External review helps improve implementation quality
 
 ## Prerequisites
 
