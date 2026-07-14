@@ -1861,13 +1861,13 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
         "$MAINLINE_VERDICT_STALLED"|"$MAINLINE_VERDICT_REGRESSED")
             NEXT_MAINLINE_STALL_COUNT=$((MAINLINE_STALL_COUNT + 1))
             NEXT_LAST_MAINLINE_VERDICT="$EXTRACTED_MAINLINE_VERDICT"
-            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 2 ]]; then
+            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 8 ]]; then
                 NEXT_DRIFT_STATUS="$DRIFT_STATUS_REPLAN_REQUIRED"
                 DRIFT_REPLAN_REQUIRED=true
             else
                 NEXT_DRIFT_STATUS="$DRIFT_STATUS_NORMAL"
             fi
-            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 3 ]]; then
+            if [[ "$NEXT_MAINLINE_STALL_COUNT" -gt 10 ]]; then
                 MAINLINE_DRIFT_STOP=true
             fi
             ;;

@@ -50,6 +50,12 @@ Include a brief Goal Alignment Summary in your review:
 ACs: X/Y addressed | Forgotten items: N | Unjustified deferrals: N
 ```
 
+## Part 2.5: Kernel Optimization Guidance (when applicable)
+
+If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), consult the **KernelWiki** knowledge base to provide optimization guidance. Locate KernelWiki by searching for a directory named `KernelWiki` that contains `SKILL.md` and `scripts/query.py` (common locations: `~/.codex/skills/KernelWiki`, `~/.claude/skills/KernelWiki`, or a path referenced in the plan). Read its `SKILL.md` for available query tools and usage instructions, then query it for techniques relevant to the current kernel's bottlenecks.
+
+Include concrete optimization suggestions with wiki page references in your review. These suggestions are advisory and must not block the COMPLETE verdict on their own.
+
 ## Part 3: Required Finding Classification
 
 You MUST classify your findings into these lanes:

@@ -52,6 +52,12 @@ Estimated remaining rounds: ?
 Critical blockers: [list if any]
 ```
 
+## Part 1.5: Kernel Optimization Guidance (when applicable)
+
+If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), consult the **KernelWiki** knowledge base to assess the optimization trajectory and provide guidance. Locate KernelWiki by searching for a directory named `KernelWiki` that contains `SKILL.md` and `scripts/query.py` (common locations: `~/.codex/skills/KernelWiki`, `~/.claude/skills/KernelWiki`, or a path referenced in the plan). Read its `SKILL.md` for available query tools and usage instructions.
+
+During Full Alignment Checks, focus on whether the overall optimization strategy is sound. If progress has stalled, query KernelWiki for alternative approaches. Include a brief "KernelWiki Optimization Recommendations" subsection with bottleneck diagnosis, recommended techniques (with wiki page references), and suggested next direction. These suggestions are advisory and must not block the COMPLETE verdict on their own.
+
 ## Part 2: Mainline Drift Audit (MANDATORY)
 
 Determine whether the recent rounds are still serving the original plan:

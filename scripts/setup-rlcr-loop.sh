@@ -17,7 +17,7 @@ set -euo pipefail
 # DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT are provided by loop-common.sh
 DEFAULT_CODEX_TIMEOUT=5400
 DEFAULT_MAX_ITERATIONS=42
-DEFAULT_FULL_REVIEW_ROUND=5
+DEFAULT_FULL_REVIEW_ROUND=15
 
 # Default timeout for git operations (30 seconds)
 GIT_TIMEOUT=30
