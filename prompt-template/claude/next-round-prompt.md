@@ -64,19 +64,6 @@ Before starting work, **read** @{{GOAL_TRACKER_FILE}} to understand:
 Do NOT change the immutable section after Round 0.
 If you cannot safely reconcile the tracker yourself, include an optional "Goal Tracker Update Request" section in your summary (see below).
 
-## Kernel Optimization Re-anchor (when applicable)
-
-If this task is a kernel optimization task, perform these steps before writing code:
-
-1. **Read optimization history**: read `leaderboard.csv`, `docs/draft.md` (attempt ledger / milestone ladder), and run `git log --oneline -- solution/` to understand what has been tried, what speedups were achieved, and what approaches were rejected.
-2. **Diagnose the plateau**: if the previous round did not advance the speedup target, identify WHY. Was it memory-bound? Compute-bound? Launch overhead? Read profiler evidence from previous rounds if available.
-3. **Consider structural rewrites**: incremental edits (changing block sizes, adding pragmas, minor loop reordering) have diminishing returns. If the current kernel structure has been tuned for 2+ rounds without meaningful improvement, consider:
-   - Rewriting the kernel with a fundamentally different algorithm or data layout
-   - Fusing multiple operations that are currently separate kernels
-   - Changing the parallelization strategy (e.g., thread-per-row to warp-per-row, or persistent kernel)
-   - Using hardware-specific features not yet exploited (TMA, warp specialization, shared memory swizzling)
-4. **Record the decision**: in your round contract, explicitly state whether this round is an incremental tune or a structural rewrite, and why.
-
 ## Mainline Guardrails
 
 - Keep the mainline objective from @{{ROUND_CONTRACT_FILE}} stable for this round

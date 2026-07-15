@@ -52,13 +52,7 @@ ACs: X/Y addressed | Forgotten items: N | Unjustified deferrals: N
 
 ## Part 2.5: Kernel Optimization Guidance (when applicable)
 
-If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work):
-
-**History audit**: Read `leaderboard.csv` and `git log --oneline -- solution/` to check whether Claude reviewed past attempts. If Claude's round made changes similar to a previously rejected approach without acknowledging it, flag this as a mainline gap.
-
-**Structural change assessment**: If `leaderboard.csv` shows speedup has plateaued for 2+ consecutive rounds under the same kernel structure, recommend a structural rewrite in your review rather than further incremental tuning. Be specific about what kind of structural change would help.
-
-**KernelWiki consultation**: Consult the **KernelWiki** knowledge base to provide optimization guidance. Locate KernelWiki by searching for a directory named `KernelWiki` that contains `SKILL.md` and `scripts/query.py` (common locations: `~/.codex/skills/KernelWiki`, `~/.claude/skills/KernelWiki`, or a path referenced in the plan). Read its `SKILL.md` for available query tools and usage instructions, then query it for techniques relevant to the current kernel's bottlenecks.
+If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), consult the **KernelWiki** knowledge base to provide optimization guidance. Locate KernelWiki by searching for a directory named `KernelWiki` that contains `SKILL.md` and `scripts/query.py` (common locations: `~/.codex/skills/KernelWiki`, `~/.claude/skills/KernelWiki`, or a path referenced in the plan). Read its `SKILL.md` for available query tools and usage instructions, then query it for techniques relevant to the current kernel's bottlenecks.
 
 Include concrete optimization suggestions with wiki page references in your review. These suggestions are advisory and must not block the COMPLETE verdict on their own.
 

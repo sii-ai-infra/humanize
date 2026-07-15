@@ -60,18 +60,6 @@ Before starting work, **read and update** @{{GOAL_TRACKER_FILE}} as needed:
 - Keep blocking vs queued issue classification accurate
 - Ensure the tracker and contract now describe the same recovered mainline objective
 
-## Kernel Optimization Recovery (when applicable)
-
-If this is a kernel optimization task and the mainline has stalled, the most likely cause is that incremental edits have hit a ceiling. Before writing code:
-
-1. **Full history review**: read `leaderboard.csv` end-to-end, read `git log --oneline -- solution/`, and identify the peak speedup achieved and which round achieved it. If the peak was N rounds ago and no progress since, the current approach is exhausted.
-2. **Mandatory structural pivot**: if the same kernel structure has been edited for 3+ rounds without measurable improvement, you MUST rewrite the kernel from scratch using a fundamentally different approach. Do not make another incremental edit to the same code. Examples of structural pivots:
-   - Scalar loop kernel -> vectorized/tiled kernel
-   - Naive reduction -> warp shuffle reduction -> CUB/multi-stage reduction
-   - Separate kernels -> fused kernel
-   - Standard launch -> persistent kernel with cooperative groups
-3. **KernelWiki consultation**: if a KernelWiki skill is available, query it for the specific operator type and bottleneck. Use its recommendations to choose the pivot direction.
-
 ## Recovery Guardrails
 
 - Do not spend this round mostly on queued cleanup
