@@ -69,6 +69,9 @@ else
     assert_eq "default_config.json: codex_model is gpt-5.5" \
         "gpt-5.5" "$(jq -r '.codex_model' "$DEFAULT_CONFIG")"
 
+    assert_eq "default_config.json: codex_profile is empty" \
+        "" "$(jq -r '.codex_profile' "$DEFAULT_CONFIG")"
+
     assert_eq "default_config.json: codex_effort is high" \
         "high" "$(jq -r '.codex_effort' "$DEFAULT_CONFIG")"
 
@@ -104,6 +107,9 @@ else
     assert_eq "default-only: codex_model defaults to gpt-5.5" \
         "gpt-5.5" "$(get_config_value "$merged" "codex_model")"
 
+    assert_eq "default-only: codex_profile defaults to empty" \
+        "" "$(get_config_value "$merged" "codex_profile")"
+
     assert_eq "default-only: codex_effort defaults to high" \
         "high" "$(get_config_value "$merged" "codex_effort")"
 
@@ -111,12 +117,15 @@ else
     setup_test_dir
     PROJECT_DIR="$TEST_DIR/project-override"
     mkdir -p "$PROJECT_DIR/.humanize"
-    printf '{"codex_model": "gpt-5.2", "codex_effort": "xhigh"}' > "$PROJECT_DIR/.humanize/config.json"
+    printf '{"codex_model": "glm-5.2", "codex_profile": "glm", "codex_effort": "xhigh"}' > "$PROJECT_DIR/.humanize/config.json"
 
     merged=$(XDG_CONFIG_HOME="$TEST_DIR/no-user-config2" load_merged_config "$PROJECT_ROOT" "$PROJECT_DIR" 2>/dev/null)
 
     assert_eq "project override: codex_model overrides default" \
-        "gpt-5.2" "$(get_config_value "$merged" "codex_model")"
+        "glm-5.2" "$(get_config_value "$merged" "codex_model")"
+
+    assert_eq "project override: codex_profile overrides default" \
+        "glm" "$(get_config_value "$merged" "codex_profile")"
 
     assert_eq "project override: codex_effort overrides default" \
         "xhigh" "$(get_config_value "$merged" "codex_effort")"
@@ -138,14 +147,17 @@ else
     # Test default values load correctly
     result=$(bash -c "
         source '$LOOP_COMMON' 2>/dev/null
-        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_EFFORT\"
+        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_PROFILE|\$DEFAULT_CODEX_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
     assert_eq "loop-common.sh: DEFAULT_CODEX_MODEL is set" \
         "gpt-5.5" "$(echo "$result" | cut -d'|' -f1)"
 
+    assert_eq "loop-common.sh: DEFAULT_CODEX_PROFILE is empty" \
+        "" "$(echo "$result" | cut -d'|' -f2)"
+
     assert_eq "loop-common.sh: DEFAULT_CODEX_EFFORT is set" \
-        "high" "$(echo "$result" | cut -d'|' -f2)"
+        "high" "$(echo "$result" | cut -d'|' -f3)"
 
     # Verify no reviewer constants or defaults exist
     result=$(bash -c "
@@ -163,36 +175,45 @@ else
     setup_test_dir
     OVERRIDE_PROJECT="$TEST_DIR/override-project"
     mkdir -p "$OVERRIDE_PROJECT/.humanize"
-    printf '{"codex_model": "o3-mini", "codex_effort": "low"}' > "$OVERRIDE_PROJECT/.humanize/config.json"
+    printf '{"codex_model": "glm-5.2", "codex_profile": "glm", "codex_effort": "low"}' > "$OVERRIDE_PROJECT/.humanize/config.json"
 
     result=$(bash -c "
         export CLAUDE_PROJECT_DIR='$OVERRIDE_PROJECT'
         export XDG_CONFIG_HOME='$TEST_DIR/no-user-config'
+        cd '$OVERRIDE_PROJECT'
         source '$LOOP_COMMON' 2>/dev/null
-        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_EFFORT\"
+        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_PROFILE|\$DEFAULT_CODEX_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
     assert_eq "config merge: project override feeds into DEFAULT_CODEX_MODEL" \
-        "o3-mini" "$(echo "$result" | cut -d'|' -f1)"
+        "glm-5.2" "$(echo "$result" | cut -d'|' -f1)"
+
+    assert_eq "config merge: project override feeds into DEFAULT_CODEX_PROFILE" \
+        "glm" "$(echo "$result" | cut -d'|' -f2)"
 
     assert_eq "config merge: project override feeds into DEFAULT_CODEX_EFFORT" \
-        "low" "$(echo "$result" | cut -d'|' -f2)"
+        "low" "$(echo "$result" | cut -d'|' -f3)"
 
     # Caller-provided defaults must continue to override config values
     result=$(bash -c "
         export DEFAULT_CODEX_MODEL='preset-model'
         export DEFAULT_CODEX_EFFORT='medium'
+        export DEFAULT_CODEX_PROFILE='preset-profile'
         export CLAUDE_PROJECT_DIR='$OVERRIDE_PROJECT'
         export XDG_CONFIG_HOME='$TEST_DIR/no-user-config'
+        cd '$OVERRIDE_PROJECT'
         source '$LOOP_COMMON' 2>/dev/null
-        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_EFFORT\"
+        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_PROFILE|\$DEFAULT_CODEX_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
     assert_eq "caller preset: DEFAULT_CODEX_MODEL wins over config" \
         "preset-model" "$(echo "$result" | cut -d'|' -f1)"
 
+    assert_eq "caller preset: DEFAULT_CODEX_PROFILE wins over config" \
+        "preset-profile" "$(echo "$result" | cut -d'|' -f2)"
+
     assert_eq "caller preset: DEFAULT_CODEX_EFFORT wins over config" \
-        "medium" "$(echo "$result" | cut -d'|' -f2)"
+        "medium" "$(echo "$result" | cut -d'|' -f3)"
 
     # Invalid config values should warn and fall back to hardcoded defaults
     setup_test_dir
@@ -203,8 +224,9 @@ else
     result=$(bash -c "
         export CLAUDE_PROJECT_DIR='$INVALID_PROJECT'
         export XDG_CONFIG_HOME='$TEST_DIR/no-user-config-invalid'
+        cd '$INVALID_PROJECT'
         source '$LOOP_COMMON'
-        printf 'RESULT:%s|%s\n' \"\$DEFAULT_CODEX_MODEL\" \"\$DEFAULT_CODEX_EFFORT\"
+        printf 'RESULT:%s|%s|%s\n' \"\$DEFAULT_CODEX_MODEL\" \"\$DEFAULT_CODEX_PROFILE\" \"\$DEFAULT_CODEX_EFFORT\"
     " 2>&1 || echo "ERROR")
 
     result_line="$(printf '%s\n' "$result" | grep '^RESULT:' | tail -n 1)"
@@ -213,7 +235,7 @@ else
         "gpt-5.5" "$(echo "$result_line" | cut -d':' -f2 | cut -d'|' -f1)"
 
     assert_eq "invalid config: codex_effort falls back to high" \
-        "high" "$(echo "$result_line" | cut -d'|' -f2)"
+        "high" "$(echo "$result_line" | cut -d'|' -f3)"
 
     assert_contains "invalid config: warns on invalid codex_model" \
         "Warning: Invalid codex_model in merged config: haiku!" "$result"
@@ -221,30 +243,28 @@ else
     assert_contains "invalid config: warns on invalid codex_effort" \
         "Warning: Invalid codex_effort in merged config: superhigh" "$result"
 
-    # Shell-safe but non-Codex models should also warn and fall back
-    for invalid_model in haiku false claude-3; do
+    # Shell-safe custom model names should pass through to Codex CLI without prefix restrictions
+    for custom_model in haiku false claude-3 glm-5.2 openrouter/kimi-k2; do
         setup_test_dir
-        INVALID_PROJECT="$TEST_DIR/invalid-model-project"
-        mkdir -p "$INVALID_PROJECT/.humanize"
-        printf '{"codex_model": "%s"}' "$invalid_model" > "$INVALID_PROJECT/.humanize/config.json"
+        CUSTOM_PROJECT="$TEST_DIR/custom-model-project"
+        mkdir -p "$CUSTOM_PROJECT/.humanize"
+        printf '{"codex_model": "%s"}' "$custom_model" > "$CUSTOM_PROJECT/.humanize/config.json"
 
         result=$(bash -c "
-            export CLAUDE_PROJECT_DIR='$INVALID_PROJECT'
-            export XDG_CONFIG_HOME='$TEST_DIR/no-user-config-invalid-model'
+            export CLAUDE_PROJECT_DIR='$CUSTOM_PROJECT'
+            export XDG_CONFIG_HOME='$TEST_DIR/no-user-config-custom-model'
+            cd '$CUSTOM_PROJECT'
             source '$LOOP_COMMON'
             printf 'RESULT:%s|%s\n' \"\$DEFAULT_CODEX_MODEL\" \"\$DEFAULT_CODEX_EFFORT\"
         " 2>&1 || echo "ERROR")
 
         result_line="$(printf '%s\n' "$result" | grep '^RESULT:' | tail -n 1)"
 
-        assert_eq "non-Codex config ($invalid_model): codex_model falls back to gpt-5.5" \
-            "gpt-5.5" "$(echo "$result_line" | cut -d':' -f2 | cut -d'|' -f1)"
+        assert_eq "custom config ($custom_model): codex_model is accepted" \
+            "$custom_model" "$(echo "$result_line" | cut -d':' -f2 | cut -d'|' -f1)"
 
-        assert_eq "non-Codex config ($invalid_model): codex_effort stays at high fallback" \
+        assert_eq "custom config ($custom_model): codex_effort stays at high fallback" \
             "high" "$(echo "$result_line" | cut -d'|' -f2)"
-
-        assert_contains "non-Codex config ($invalid_model): warns on unsupported codex_model" \
-            "Warning: Unsupported codex_model in merged config: $invalid_model" "$result"
     done
 fi
 
@@ -266,6 +286,7 @@ else
 current_round: 1
 max_iterations: 42
 codex_model: gpt-5.2
+codex_profile: glm
 codex_effort: xhigh
 codex_timeout: 5400
 push_every_round: false
@@ -286,15 +307,19 @@ STATE_EOF
         source '$LOOP_COMMON' 2>/dev/null
         parse_state_file '$TEST_DIR/codex-state.md'
         EXEC_MODEL=\"\${STATE_CODEX_MODEL:-\$DEFAULT_CODEX_MODEL}\"
+        EXEC_PROFILE=\"\${STATE_CODEX_PROFILE:-\${DEFAULT_CODEX_PROFILE:-}}\"
         EXEC_EFFORT=\"\${STATE_CODEX_EFFORT:-\$DEFAULT_CODEX_EFFORT}\"
-        echo \"\$EXEC_MODEL|\$EXEC_EFFORT\"
+        echo \"\$EXEC_MODEL|\$EXEC_PROFILE|\$EXEC_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
     assert_eq "stop hook: codex model from state (gpt-5.2)" \
         "gpt-5.2" "$(echo "$result" | cut -d'|' -f1)"
 
+    assert_eq "stop hook: codex profile from state (glm)" \
+        "glm" "$(echo "$result" | cut -d'|' -f2)"
+
     assert_eq "stop hook: codex effort from state (xhigh)" \
-        "xhigh" "$(echo "$result" | cut -d'|' -f2)"
+        "xhigh" "$(echo "$result" | cut -d'|' -f3)"
 
     # Bare state (no codex fields) - should fall back to defaults
     setup_test_dir
@@ -321,21 +346,22 @@ BARE_EOF
         source '$LOOP_COMMON' 2>/dev/null
         parse_state_file '$TEST_DIR/bare-state.md'
         EXEC_MODEL=\"\${STATE_CODEX_MODEL:-\$DEFAULT_CODEX_MODEL}\"
+        EXEC_PROFILE=\"\${STATE_CODEX_PROFILE:-\${DEFAULT_CODEX_PROFILE:-}}\"
         EXEC_EFFORT=\"\${STATE_CODEX_EFFORT:-\$DEFAULT_CODEX_EFFORT}\"
-        echo \"\$EXEC_MODEL|\$EXEC_EFFORT\"
+        echo \"\$EXEC_MODEL|\$EXEC_PROFILE|\$EXEC_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
     assert_eq "bare state: falls back to DEFAULT_CODEX_MODEL (gpt-5.5)" \
         "gpt-5.5" "$(echo "$result" | cut -d'|' -f1)"
 
     assert_eq "bare state: falls back to DEFAULT_CODEX_EFFORT (high)" \
-        "high" "$(echo "$result" | cut -d'|' -f2)"
+        "high" "$(echo "$result" | cut -d'|' -f3)"
 
     # Config override + bare state: config-backed defaults used
     setup_test_dir
     OVERRIDE_PROJECT="$TEST_DIR/codex-override"
     mkdir -p "$OVERRIDE_PROJECT/.humanize"
-    printf '{"codex_model": "o1-preview", "codex_effort": "medium"}' > "$OVERRIDE_PROJECT/.humanize/config.json"
+    printf '{"codex_model": "glm-5.2", "codex_profile": "glm", "codex_effort": "medium"}' > "$OVERRIDE_PROJECT/.humanize/config.json"
 
     cat > "$TEST_DIR/cfg-bare-state.md" << 'CFG_BARE_EOF'
 ---
@@ -359,18 +385,23 @@ CFG_BARE_EOF
     result=$(bash -c "
         export CLAUDE_PROJECT_DIR='$OVERRIDE_PROJECT'
         export XDG_CONFIG_HOME='$TEST_DIR/no-user-config'
+        cd '$OVERRIDE_PROJECT'
         source '$LOOP_COMMON' 2>/dev/null
         parse_state_file '$TEST_DIR/cfg-bare-state.md'
         EXEC_MODEL=\"\${STATE_CODEX_MODEL:-\$DEFAULT_CODEX_MODEL}\"
+        EXEC_PROFILE=\"\${STATE_CODEX_PROFILE:-\${DEFAULT_CODEX_PROFILE:-}}\"
         EXEC_EFFORT=\"\${STATE_CODEX_EFFORT:-\$DEFAULT_CODEX_EFFORT}\"
-        echo \"\$EXEC_MODEL|\$EXEC_EFFORT\"
+        echo \"\$EXEC_MODEL|\$EXEC_PROFILE|\$EXEC_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
-    assert_eq "config override + bare state: codex model from config (o1-preview)" \
-        "o1-preview" "$(echo "$result" | cut -d'|' -f1)"
+    assert_eq "config override + bare state: codex model from config (glm-5.2)" \
+        "glm-5.2" "$(echo "$result" | cut -d'|' -f1)"
+
+    assert_eq "config override + bare state: codex profile from config (glm)" \
+        "glm" "$(echo "$result" | cut -d'|' -f2)"
 
     assert_eq "config override + bare state: codex effort from config (medium)" \
-        "medium" "$(echo "$result" | cut -d'|' -f2)"
+        "medium" "$(echo "$result" | cut -d'|' -f3)"
 fi
 
 echo ""
@@ -385,6 +416,7 @@ SETUP_SCRIPT="$PROJECT_ROOT/scripts/setup-rlcr-loop.sh"
 
 assert_no_grep "setup script: no loop_reviewer references" 'loop_reviewer' "$SETUP_SCRIPT"
 assert_grep "setup script: state.md template includes codex_model" 'codex_model:' "$SETUP_SCRIPT"
+assert_grep "setup script: state.md template includes codex_profile" 'codex_profile:' "$SETUP_SCRIPT"
 assert_grep "setup script: state.md template includes codex_effort" 'codex_effort:' "$SETUP_SCRIPT"
 
 echo ""
@@ -407,15 +439,16 @@ else
     result=$(bash -c "
         export CLAUDE_PROJECT_DIR='$STALE_PROJECT'
         export XDG_CONFIG_HOME='$TEST_DIR/no-user-config'
+        cd '$STALE_PROJECT'
         source '$LOOP_COMMON' 2>/dev/null
-        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_EFFORT\"
+        echo \"\$DEFAULT_CODEX_MODEL|\$DEFAULT_CODEX_PROFILE|\$DEFAULT_CODEX_EFFORT\"
     " 2>/dev/null || echo "ERROR")
 
     assert_eq "stale config: codex_model from config (gpt-5.3), reviewer keys ignored" \
         "gpt-5.3" "$(echo "$result" | cut -d'|' -f1)"
 
     assert_eq "stale config: codex_effort from hardcoded fallback (high), reviewer keys ignored" \
-        "high" "$(echo "$result" | cut -d'|' -f2)"
+        "high" "$(echo "$result" | cut -d'|' -f3)"
 
     # State file with stale reviewer fields - parser should not set STATE_LOOP_REVIEWER_*
     setup_test_dir
@@ -526,7 +559,7 @@ STUB_EOF
         CLAUDE_PROJECT_DIR="$HOOK_PROJECT" \
         CODEX_INVOCATION_LOG="$CODEX_LOG" \
         PATH="$STUB_BIN:$PATH" \
-        bash "$STOP_HOOK" 2>&1 >/dev/null) || true
+        bash -c "cd '$HOOK_PROJECT' && exec '$STOP_HOOK'" 2>&1 >/dev/null) || true
 
     # Assert: hook reported the invalid effort error (now "codex effort" not "reviewer effort")
     if echo "$hook_stderr" | grep -q "Invalid codex effort"; then
@@ -585,7 +618,7 @@ PLAN_EOF
 
     # Run setup-rlcr-loop.sh with --codex-model override
     setup_exit=0
-    output=$(cd "$EXEC_PROJECT" && CLAUDE_PROJECT_DIR="$EXEC_PROJECT" run_with_timeout 30 bash "$SETUP_SCRIPT" --codex-model gpt-5.3:xhigh --base-branch master --track-plan-file plan.md 2>&1) || setup_exit=$?
+    output=$(cd "$EXEC_PROJECT" && CLAUDE_PROJECT_DIR="$EXEC_PROJECT" run_with_timeout 30 bash "$SETUP_SCRIPT" --codex-profile glm --codex-model glm-5.3:xhigh --base-branch master --track-plan-file plan.md 2>&1) || setup_exit=$?
 
     assert_eq "setup execution: setup-rlcr-loop.sh exited successfully" \
         "0" "$setup_exit"
@@ -614,8 +647,11 @@ PLAN_EOF
         fi
 
         # Verify codex_model from --codex-model flag
-        assert_eq "setup execution: --codex-model set codex_model (gpt-5.3)" \
-            "gpt-5.3" "$(grep '^codex_model:' "$STATE_FILE" | sed 's/codex_model: *//')"
+        assert_eq "setup execution: --codex-model set codex_model (glm-5.3)" \
+            "glm-5.3" "$(grep '^codex_model:' "$STATE_FILE" | sed 's/codex_model: *//')"
+
+        assert_eq "setup execution: --codex-profile set codex_profile (glm)" \
+            "glm" "$(grep '^codex_profile:' "$STATE_FILE" | sed 's/codex_profile: *//')"
 
         assert_eq "setup execution: --codex-model set codex_effort (xhigh)" \
             "xhigh" "$(grep '^codex_effort:' "$STATE_FILE" | sed 's/codex_effort: *//')"
@@ -642,14 +678,14 @@ echo "--- Input validation ---"
 
 # Test invalid model name (has spaces) - test the validation regex directly
 model_with_spaces="gpt 5.5 bad"
-if [[ ! "$model_with_spaces" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+if [[ ! "$model_with_spaces" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     pass "validation: model with spaces is rejected by regex"
 else
     fail "validation: model with spaces is rejected by regex"
 fi
 
 model_with_shell="gpt-5.5;rm-rf"
-if [[ ! "$model_with_shell" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+if [[ ! "$model_with_shell" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     pass "validation: model with shell metacharacters is rejected"
 else
     fail "validation: model with shell metacharacters is rejected"
@@ -696,6 +732,9 @@ else
     assert_grep "ask-codex.sh: assigns CODEX_MODEL from DEFAULT_CODEX_MODEL" \
         'CODEX_MODEL="\$DEFAULT_CODEX_MODEL"' "$ASK_CODEX"
 
+    assert_grep "ask-codex.sh: assigns CODEX_PROFILE from DEFAULT_CODEX_PROFILE" \
+        'CODEX_PROFILE="\${DEFAULT_CODEX_PROFILE:-}"' "$ASK_CODEX"
+
     assert_grep "ask-codex.sh: assigns CODEX_EFFORT from DEFAULT_CODEX_EFFORT" \
         'CODEX_EFFORT="\$DEFAULT_CODEX_EFFORT"' "$ASK_CODEX"
 
@@ -719,7 +758,7 @@ else
     ASK_CFG_PROJECT="$TEST_DIR/ask-cfg-project"
     init_test_git_repo "$ASK_CFG_PROJECT"
     mkdir -p "$ASK_CFG_PROJECT/.humanize"
-    printf '{"codex_model": "o3-mini", "codex_effort": "low"}' > "$ASK_CFG_PROJECT/.humanize/config.json"
+    printf '{"codex_model": "glm-5.2", "codex_profile": "glm", "codex_effort": "low"}' > "$ASK_CFG_PROJECT/.humanize/config.json"
 
     # Create a mock codex that outputs a fixed response
     MOCK_BIN="$TEST_DIR/mock-bin"
@@ -739,10 +778,16 @@ MOCK_EOF
         run_with_timeout 30 bash "$ASK_CODEX" "test question" 2>&1 >/dev/null) || true
 
     # Stderr should report config-backed model and effort
-    if echo "$ask_stderr" | grep -q 'model=o3-mini'; then
-        pass "ask-codex runtime: config-backed model reported in stderr (o3-mini)"
+    if echo "$ask_stderr" | grep -q 'model=glm-5.2'; then
+        pass "ask-codex runtime: config-backed model reported in stderr (glm-5.2)"
     else
-        fail "ask-codex runtime: config-backed model reported in stderr (o3-mini)" "contains 'model=o3-mini'" "$ask_stderr"
+        fail "ask-codex runtime: config-backed model reported in stderr (glm-5.2)" "contains 'model=glm-5.2'" "$ask_stderr"
+    fi
+
+    if echo "$ask_stderr" | grep -q 'profile=glm'; then
+        pass "ask-codex runtime: config-backed profile reported in stderr (glm)"
+    else
+        fail "ask-codex runtime: config-backed profile reported in stderr (glm)" "contains 'profile=glm'" "$ask_stderr"
     fi
 
     if echo "$ask_stderr" | grep -q 'effort=low'; then
@@ -756,7 +801,7 @@ MOCK_EOF
         CLAUDE_PROJECT_DIR="$ASK_CFG_PROJECT" \
         XDG_CONFIG_HOME="$TEST_DIR/no-user-config" \
         PATH="$MOCK_BIN:$PATH" \
-        run_with_timeout 30 bash "$ASK_CODEX" --codex-model override-model:xhigh "test question" 2>&1 >/dev/null) || true
+        run_with_timeout 30 bash "$ASK_CODEX" --codex-profile glm --codex-model override-model:xhigh "test question" 2>&1 >/dev/null) || true
 
     if echo "$override_stderr" | grep -q 'model=override-model'; then
         pass "ask-codex runtime: --codex-model override reported in stderr (override-model)"
@@ -768,6 +813,11 @@ MOCK_EOF
         pass "ask-codex runtime: --codex-model override effort in stderr (xhigh)"
     else
         fail "ask-codex runtime: --codex-model override effort in stderr (xhigh)" "contains 'effort=xhigh'" "$override_stderr"
+    fi
+    if echo "$override_stderr" | grep -q 'profile=glm'; then
+        pass "ask-codex runtime: --codex-profile override reported in stderr (glm)"
+    else
+        fail "ask-codex runtime: --codex-profile override reported in stderr (glm)" "contains 'profile=glm'" "$override_stderr"
     fi
 fi
 

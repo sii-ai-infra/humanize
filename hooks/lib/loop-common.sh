@@ -31,6 +31,7 @@ readonly FIELD_CURRENT_ROUND="current_round"
 readonly FIELD_MAX_ITERATIONS="max_iterations"
 readonly FIELD_PUSH_EVERY_ROUND="push_every_round"
 readonly FIELD_CODEX_MODEL="codex_model"
+readonly FIELD_CODEX_PROFILE="codex_profile"
 readonly FIELD_CODEX_EFFORT="codex_effort"
 readonly FIELD_CODEX_TIMEOUT="codex_timeout"
 readonly FIELD_REVIEW_STARTED="review_started"
@@ -215,6 +216,13 @@ if [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^[a-zA-Z0-9._/-]+$ ]]; 
     _cfg_codex_model=""
 fi
 DEFAULT_CODEX_MODEL="${DEFAULT_CODEX_MODEL:-${_cfg_codex_model:-gpt-5.5}}"
+_cfg_codex_profile="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_profile" 2>/dev/null || true)"
+if [[ -n "$_cfg_codex_profile" && ! "$_cfg_codex_profile" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "Warning: Invalid codex_profile in merged config: $_cfg_codex_profile" >&2
+    echo "  Ignoring configured codex_profile; using caller preset or fallback" >&2
+    _cfg_codex_profile=""
+fi
+DEFAULT_CODEX_PROFILE="${DEFAULT_CODEX_PROFILE:-$_cfg_codex_profile}"
 _cfg_codex_effort="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_effort" 2>/dev/null || true)"
 if [[ -n "$_cfg_codex_effort" && ! "$_cfg_codex_effort" =~ ^(xhigh|high|medium|low)$ ]]; then
     echo "Warning: Invalid codex_effort in merged config: $_cfg_codex_effort" >&2
@@ -228,7 +236,7 @@ DEFAULT_CODEX_EFFORT="${DEFAULT_CODEX_EFFORT:-${_cfg_codex_effort:-high}}"
 # Precedence: pre-set by caller (e.g. --agent-teams flag) > config value > hardcoded fallback (false)
 _cfg_agent_teams="$(get_config_value "$_LOOP_COMMON_CONFIG" "agent_teams" 2>/dev/null || true)"
 DEFAULT_AGENT_TEAMS="${DEFAULT_AGENT_TEAMS:-${_cfg_agent_teams:-false}}"
-unset _cfg_codex_model _cfg_codex_effort _cfg_agent_teams
+unset _cfg_codex_model _cfg_codex_profile _cfg_codex_effort _cfg_agent_teams
 
 unset _LOOP_COMMON_PROJECT_ROOT _LOOP_COMMON_CONFIG
 
@@ -450,6 +458,7 @@ _parse_state_fields() {
     STATE_MAX_ITERATIONS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_MAX_ITERATIONS}:" | sed "s/${FIELD_MAX_ITERATIONS}: *//" | tr -d ' ' || true)
     STATE_PUSH_EVERY_ROUND=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_PUSH_EVERY_ROUND}:" | sed "s/${FIELD_PUSH_EVERY_ROUND}: *//" | tr -d ' ' || true)
     STATE_CODEX_MODEL=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_MODEL}:" | sed "s/${FIELD_CODEX_MODEL}: *//" | tr -d ' ' || true)
+    STATE_CODEX_PROFILE=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_PROFILE}:" | sed "s/${FIELD_CODEX_PROFILE}: *//" | tr -d ' ' || true)
     STATE_CODEX_EFFORT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_EFFORT}:" | sed "s/${FIELD_CODEX_EFFORT}: *//" | tr -d ' ' || true)
     STATE_CODEX_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_TIMEOUT}:" | sed "s/${FIELD_CODEX_TIMEOUT}: *//" | tr -d ' ' || true)
     STATE_REVIEW_STARTED=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_REVIEW_STARTED}:" | sed "s/${FIELD_REVIEW_STARTED}: *//" | tr -d ' ' || true)
@@ -475,6 +484,7 @@ _parse_state_fields() {
 #   STATE_MAX_ITERATIONS - max iterations
 #   STATE_PUSH_EVERY_ROUND - "true" or "false"
 #   STATE_CODEX_MODEL - codex model name
+#   STATE_CODEX_PROFILE - optional Codex config profile name (-p/--profile)
 #   STATE_CODEX_EFFORT - codex effort level
 #   STATE_CODEX_TIMEOUT - codex timeout in seconds
 #   STATE_REVIEW_STARTED - "true" or "false"

@@ -6,7 +6,7 @@
 # This is an active, one-shot skill (unlike the passive RLCR loop).
 #
 # Usage:
-#   ask-codex.sh [--codex-model MODEL:EFFORT] [--codex-timeout SECONDS] [question...]
+#   ask-codex.sh [--codex-model MODEL:EFFORT] [--codex-profile PROFILE] [--codex-timeout SECONDS] [question...]
 #
 # Output:
 #   stdout: Codex's response (for Claude to read)
@@ -39,6 +39,7 @@ source "$HOOKS_LIB_DIR/loop-common.sh"
 DEFAULT_ASK_CODEX_TIMEOUT=3600
 
 CODEX_MODEL="$DEFAULT_CODEX_MODEL"
+CODEX_PROFILE="${DEFAULT_CODEX_PROFILE:-}"
 CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
 CODEX_TIMEOUT="$DEFAULT_ASK_CODEX_TIMEOUT"
 
@@ -56,6 +57,8 @@ USAGE:
 OPTIONS:
   --codex-model <MODEL:EFFORT>
                        Codex model and reasoning effort (default from config, fallback gpt-5.5:high)
+  --codex-profile <PROFILE>
+                       Codex config profile to pass as `codex -p PROFILE`
   --codex-timeout <SECONDS>
                        Timeout for the Codex query in seconds (default: 3600)
   -h, --help           Show this help message
@@ -115,6 +118,14 @@ while [[ $# -gt 0 ]]; do
                 CODEX_MODEL="$2"
                 CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
             fi
+            shift 2
+            ;;
+        --codex-profile|--codex-provider)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --codex-profile requires a PROFILE argument" >&2
+                exit 1
+            fi
+            CODEX_PROFILE="$2"
             shift 2
             ;;
         --codex-timeout)
@@ -271,7 +282,11 @@ fi
 
 # Build codex exec arguments (same pattern as loop-codex-stop-hook.sh)
 # Use ${arr[@]+"${arr[@]}"} to safely expand possibly-empty arrays under set -u (bash 3.2 compat)
-CODEX_EXEC_ARGS=(${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "-m" "$CODEX_MODEL")
+CODEX_PROFILE_ARGS=()
+if [[ -n "$CODEX_PROFILE" ]]; then
+    CODEX_PROFILE_ARGS=("-p" "$CODEX_PROFILE")
+fi
+CODEX_EXEC_ARGS=(${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} ${CODEX_PROFILE_ARGS[@]+"${CODEX_PROFILE_ARGS[@]}"} "exec" "-m" "$CODEX_MODEL")
 if [[ -n "$CODEX_EFFORT" ]]; then
     CODEX_EXEC_ARGS+=("-c" "model_reasoning_effort=${CODEX_EFFORT}")
 fi
@@ -298,7 +313,7 @@ CODEX_STDERR_FILE="$CACHE_DIR/codex-run.log"
     echo "# Working directory: $PROJECT_ROOT"
     echo "# Timeout: $CODEX_TIMEOUT seconds"
     echo ""
-    echo "codex exec ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
+    echo "codex ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
     echo ""
     echo "# Prompt content:"
     echo "$QUESTION"
@@ -308,7 +323,7 @@ CODEX_STDERR_FILE="$CACHE_DIR/codex-run.log"
 # Run Codex
 # ========================================
 
-echo "ask-codex: model=$CODEX_MODEL effort=$CODEX_EFFORT timeout=${CODEX_TIMEOUT}s" >&2
+echo "ask-codex: model=$CODEX_MODEL profile=${CODEX_PROFILE:-none} effort=$CODEX_EFFORT timeout=${CODEX_TIMEOUT}s" >&2
 echo "ask-codex: cache=$CACHE_DIR" >&2
 echo "ask-codex: running codex exec..." >&2
 
@@ -323,7 +338,7 @@ epoch_to_iso() {
 START_TIME=$(date +%s)
 
 CODEX_EXIT_CODE=0
-printf '%s' "$QUESTION" | run_with_timeout "$CODEX_TIMEOUT" codex exec "${CODEX_EXEC_ARGS[@]}" - \
+printf '%s' "$QUESTION" | run_with_timeout "$CODEX_TIMEOUT" codex "${CODEX_EXEC_ARGS[@]}" - \
     > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
 
 END_TIME=$(date +%s)

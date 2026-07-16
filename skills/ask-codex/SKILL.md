@@ -1,7 +1,7 @@
 ---
 name: ask-codex
 description: Consult Codex as an independent expert. Sends a question or task to codex exec and returns the response.
-argument-hint: "[--codex-model MODEL:EFFORT] [--codex-timeout SECONDS] [question or task]"
+argument-hint: "[--codex-model MODEL:EFFORT] [--codex-profile PROFILE] [--codex-timeout SECONDS] [question or task]"
 allowed-tools: "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/ask-codex.sh:*)"
 ---
 
@@ -19,12 +19,12 @@ If the user only supplied a question or task, execute:
 "${CLAUDE_PLUGIN_ROOT}/scripts/ask-codex.sh" "$ARGUMENTS"
 ```
 
-If the user supplied flags such as `--codex-model` or `--codex-timeout`, reconstruct the command so those flags remain separate shell arguments and the remaining free-form question is passed as one quoted final argument.
+If the user supplied flags such as `--codex-model`, `--codex-profile`, or `--codex-timeout`, reconstruct the command so those flags remain separate shell arguments and the remaining free-form question is passed as one quoted final argument.
 
 Example:
 
 ```bash
-"${CLAUDE_PLUGIN_ROOT}/scripts/ask-codex.sh" --codex-model gpt-5.5:high "Review the following round summary (M4)..."
+"${CLAUDE_PLUGIN_ROOT}/scripts/ask-codex.sh" --codex-profile glm --codex-model glm-5.2:high "Review the following round summary (M4)..."
 ```
 
 Never run this unsafe form:

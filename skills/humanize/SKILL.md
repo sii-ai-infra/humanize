@@ -78,8 +78,8 @@ Treat exit `10` as a blocked hook result and follow its instructions; exit `20` 
 
 **Common Options:**
 - `--max N` - Maximum iterations before auto-stop (default: 42)
-- `--codex-model MODEL:EFFORT` - Codex model and reasoning effort for `codex exec` (default: gpt-5.5:high)
-- Review phase `codex review` uses `gpt-5.5:high`
+- `--codex-model MODEL:EFFORT` - Codex model and reasoning effort for `codex exec` and review (default: gpt-5.5:high)
+- `--codex-profile PROFILE` - Codex config profile passed as `codex -p PROFILE` for exec and review
 - `--codex-timeout SECONDS` - Timeout for each Codex review (default: 5400)
 - `--base-branch BRANCH` - Base branch for code review (auto-detects if not specified)
 - `--full-review-round N` - Interval for full alignment checks (default: 5)
@@ -112,7 +112,7 @@ Then follow the workflow in this skill to generate the structured plan content.
 ### Ask Codex (One-shot Consultation)
 
 ```bash
-"{{HUMANIZE_RUNTIME_ROOT}}/scripts/ask-codex.sh" [--codex-model MODEL:EFFORT] [--codex-timeout SECONDS] "your question"
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/ask-codex.sh" [--codex-model MODEL:EFFORT] [--codex-profile PROFILE] [--codex-timeout SECONDS] "your question"
 ```
 
 ## Plan File Structure

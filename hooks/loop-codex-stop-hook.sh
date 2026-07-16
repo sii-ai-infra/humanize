@@ -134,6 +134,7 @@ PUSH_EVERY_ROUND="$STATE_PUSH_EVERY_ROUND"
 FULL_REVIEW_ROUND="${STATE_FULL_REVIEW_ROUND:-5}"
 REVIEW_STARTED="$STATE_REVIEW_STARTED"
 CODEX_EXEC_MODEL="${STATE_CODEX_MODEL:-$DEFAULT_CODEX_MODEL}"
+CODEX_EXEC_PROFILE="${STATE_CODEX_PROFILE:-${DEFAULT_CODEX_PROFILE:-}}"
 CODEX_EXEC_EFFORT="${STATE_CODEX_EFFORT:-$DEFAULT_CODEX_EFFORT}"
 CODEX_REVIEW_MODEL="$CODEX_EXEC_MODEL"
 CODEX_REVIEW_EFFORT="high"
@@ -173,6 +174,11 @@ DRIFT_STATUS="${STATE_DRIFT_STATUS:-$DRIFT_STATUS_NORMAL}"
 # Use same validation patterns as setup-rlcr-loop.sh
 if [[ ! "$CODEX_EXEC_MODEL" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Error: Invalid codex_model in state file: $CODEX_EXEC_MODEL" >&2
+    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
+    exit 0
+fi
+if [[ -n "$CODEX_EXEC_PROFILE" && ! "$CODEX_EXEC_PROFILE" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "Error: Invalid codex_profile in state file: $CODEX_EXEC_PROFILE" >&2
     end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
     exit 0
 fi
@@ -1203,6 +1209,10 @@ else
 fi
 
 # Build command arguments for summary review (codex exec)
+CODEX_PROFILE_ARGS=()
+if [[ -n "$CODEX_EXEC_PROFILE" ]]; then
+    CODEX_PROFILE_ARGS=("-p" "$CODEX_EXEC_PROFILE")
+fi
 CODEX_EXEC_ARGS=("-m" "$CODEX_EXEC_MODEL")
 if [[ -n "$CODEX_EXEC_EFFORT" ]]; then
     CODEX_EXEC_ARGS+=("-c" "model_reasoning_effort=${CODEX_EXEC_EFFORT}")
@@ -1280,14 +1290,14 @@ Provider: codex
         echo "# Review base ($review_base_type): $review_base"
         echo "# Timeout: $CODEX_TIMEOUT seconds"
         echo ""
-        echo "codex review ${CODEX_DISABLE_HOOKS_ARGS[*]+"${CODEX_DISABLE_HOOKS_ARGS[*]}"} --base $review_base ${CODEX_REVIEW_ARGS[*]}"
+        echo "codex ${CODEX_DISABLE_HOOKS_ARGS[*]+"${CODEX_DISABLE_HOOKS_ARGS[*]}"} ${CODEX_PROFILE_ARGS[*]} review --base $review_base ${CODEX_REVIEW_ARGS[*]}"
     } > "$CODEX_REVIEW_CMD_FILE"
 
     echo "Code review command saved to: $CODEX_REVIEW_CMD_FILE" >&2
     echo "Running codex review with timeout ${CODEX_TIMEOUT}s in $PROJECT_ROOT (base: $review_base)..." >&2
 
     CODEX_REVIEW_EXIT_CODE=0
-    (cd "$PROJECT_ROOT" && run_with_timeout "$CODEX_TIMEOUT" codex review ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} --base "$review_base" "${CODEX_REVIEW_ARGS[@]}") \
+    (cd "$PROJECT_ROOT" && run_with_timeout "$CODEX_TIMEOUT" codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_PROFILE_ARGS[@]}" review --base "$review_base" "${CODEX_REVIEW_ARGS[@]}") \
         > "$CODEX_REVIEW_LOG_FILE" 2>&1 || CODEX_REVIEW_EXIT_CODE=$?
 
     echo "Code review exit code: $CODEX_REVIEW_EXIT_CODE" >&2
@@ -1706,7 +1716,7 @@ CODEX_PROMPT_CONTENT=$(cat "$REVIEW_PROMPT_FILE")
     echo "# Working directory: $PROJECT_ROOT"
     echo "# Timeout: $CODEX_TIMEOUT seconds"
     echo ""
-    echo "codex exec ${CODEX_DISABLE_HOOKS_ARGS[*]+"${CODEX_DISABLE_HOOKS_ARGS[*]}"} ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
+    echo "codex ${CODEX_DISABLE_HOOKS_ARGS[*]+"${CODEX_DISABLE_HOOKS_ARGS[*]}"} ${CODEX_PROFILE_ARGS[*]} exec ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
     echo ""
     echo "# Prompt content:"
     echo "$CODEX_PROMPT_CONTENT"
@@ -1716,7 +1726,7 @@ echo "Codex command saved to: $CODEX_CMD_FILE" >&2
 echo "Running summary review with timeout ${CODEX_TIMEOUT}s..." >&2
 
 CODEX_EXIT_CODE=0
-printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$CODEX_TIMEOUT" codex exec ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_EXEC_ARGS[@]}" - \
+printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$CODEX_TIMEOUT" codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_PROFILE_ARGS[@]}" exec "${CODEX_EXEC_ARGS[@]}" - \
     > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
 
 echo "Codex exit code: $CODEX_EXIT_CODE" >&2

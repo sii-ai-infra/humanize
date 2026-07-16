@@ -41,6 +41,7 @@ PLAN_FILE_EXPLICIT=""
 TRACK_PLAN_FILE="false"
 MAX_ITERATIONS="$DEFAULT_MAX_ITERATIONS"
 CODEX_MODEL="$DEFAULT_CODEX_MODEL"
+CODEX_PROFILE="${DEFAULT_CODEX_PROFILE:-}"
 CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
 CODEX_TIMEOUT="$DEFAULT_CODEX_TIMEOUT"
 PUSH_EVERY_ROUND="false"
@@ -104,7 +105,9 @@ OPTIONS:
   --track-plan-file    Indicate plan file should be tracked in git (must be clean)
   --max <N>            Maximum iterations before auto-stop (default: 42)
   --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort for codex exec (default: ${DEFAULT_CODEX_MODEL}:${DEFAULT_CODEX_EFFORT})
+                       Codex model and reasoning effort for codex exec/review (default: ${DEFAULT_CODEX_MODEL}:${DEFAULT_CODEX_EFFORT})
+  --codex-profile <PROFILE>
+                       Codex config profile to pass as `codex -p PROFILE` for exec/review (default: ${DEFAULT_CODEX_PROFILE:-none})
   --codex-timeout <SECONDS>
                        Timeout for each Codex review in seconds (default: 5400)
   --push-every-round   Require git push after each round (default: commits stay local)
@@ -216,6 +219,14 @@ while [[ $# -gt 0 ]]; do
                 CODEX_MODEL="$2"
                 CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
             fi
+            shift 2
+            ;;
+        --codex-profile|--codex-provider)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --codex-profile requires a PROFILE argument" >&2
+                exit 1
+            fi
+            CODEX_PROFILE="$2"
             shift 2
             ;;
         --codex-timeout)
@@ -713,6 +724,14 @@ if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     exit 1
 fi
 
+# Validate codex profile for CLI/YAML safety
+if [[ -n "$CODEX_PROFILE" && ! "$CODEX_PROFILE" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "Error: Codex profile contains invalid characters" >&2
+    echo "  Profile: $CODEX_PROFILE" >&2
+    echo "  Only alphanumeric, slash, hyphen, underscore, dot allowed" >&2
+    exit 1
+fi
+
 # Validate codex effort matches allowed values (consistent with stop-hook validation)
 if [[ ! "$CODEX_EFFORT" =~ ^(xhigh|high|medium|low)$ ]]; then
     echo "Error: Invalid codex effort: $CODEX_EFFORT" >&2
@@ -887,6 +906,7 @@ cat > "$LOOP_DIR/state.md" << EOF
 current_round: 0
 max_iterations: $MAX_ITERATIONS
 codex_model: $CODEX_MODEL
+codex_profile: $CODEX_PROFILE
 codex_effort: $CODEX_EFFORT
 codex_timeout: $CODEX_TIMEOUT
 push_every_round: $PUSH_EVERY_ROUND
@@ -1461,6 +1481,7 @@ Mode: Code Review Only (--skip-impl)
 Start Branch: $START_BRANCH
 Base Branch: $BASE_BRANCH
 Codex Model: $CODEX_MODEL
+Codex Profile: ${CODEX_PROFILE:-none}
 Codex Effort: $CODEX_EFFORT
 Codex Timeout: ${CODEX_TIMEOUT}s
 Loop Directory: $LOOP_DIR
@@ -1488,6 +1509,7 @@ Start Branch: $START_BRANCH
 Base Branch: $BASE_BRANCH
 Max Iterations: $MAX_ITERATIONS
 Codex Model: $CODEX_MODEL
+Codex Profile: ${CODEX_PROFILE:-none}
 Codex Effort: $CODEX_EFFORT
 Codex Timeout: ${CODEX_TIMEOUT}s
 Full Review Round: $FULL_REVIEW_ROUND (Full Alignment Checks at rounds $((FULL_REVIEW_ROUND - 1)), $((2 * FULL_REVIEW_ROUND - 1)), $((3 * FULL_REVIEW_ROUND - 1)), ...)
