@@ -52,9 +52,17 @@ ACs: X/Y addressed | Forgotten items: N | Unjustified deferrals: N
 
 ## Part 2.5: Kernel Optimization Guidance (when applicable)
 
-If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), consult the **KernelWiki** knowledge base to provide optimization guidance. Locate KernelWiki by searching for a directory named `KernelWiki` that contains `SKILL.md` and `scripts/query.py` (common locations: `~/.codex/skills/KernelWiki`, `~/.claude/skills/KernelWiki`, or a path referenced in the plan). Read its `SKILL.md` for available query tools and usage instructions, then query it for techniques relevant to the current kernel's bottlenecks.
+If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work):
 
-Include concrete optimization suggestions with wiki page references in your review. These suggestions are advisory and must not block the COMPLETE verdict on their own.
+**History and profiling audit**: Read `leaderboard.csv`, `git log --oneline -- solution/`, and available profiler output/benchmark traces to check whether Claude reviewed past attempts and measured the current bottleneck. If Claude's round made changes similar to a previously rejected approach without acknowledging it, or made optimization claims without profiling/benchmark evidence where profiling was feasible, flag this as a mainline gap.
+
+**Profile-guided bottleneck assessment**: Identify whether the evidence points to memory bandwidth, memory access pattern/coalescing, occupancy, register pressure, shared-memory behavior, synchronization, compute throughput, launch overhead, or another bottleneck. Review optimization choices against that measured bottleneck rather than relying on intuition alone.
+
+**Structural change assessment**: If `leaderboard.csv` shows speedup has plateaued for 2+ consecutive rounds under the same kernel structure, recommend a structural rewrite in your review rather than further incremental tuning. Be specific about what kind of structural change would help and tie the recommendation to profiling evidence where available.
+
+**KernelWiki consultation**: Consult the **KernelWiki** knowledge base to provide optimization guidance. Use the available KernelWiki skill or knowledge-base interface according to its own instructions, then query it for techniques relevant to the profiling-identified bottlenecks.
+
+Include concrete optimization suggestions with profiling observations and wiki page references in your review. Profiling analysis and KernelWiki guidance are equally important evidence sources. These suggestions are advisory and must not block the COMPLETE verdict on their own.
 
 ## Part 3: Required Finding Classification
 

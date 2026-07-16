@@ -60,6 +60,19 @@ Before starting work, **read and update** @{{GOAL_TRACKER_FILE}} as needed:
 - Keep blocking vs queued issue classification accurate
 - Ensure the tracker and contract now describe the same recovered mainline objective
 
+## Kernel Optimization Recovery (when applicable)
+
+If this is a kernel optimization task and the mainline has stalled, the most likely cause is that incremental edits have hit a ceiling. Before writing code:
+
+1. **Full history and profiling review**: read `leaderboard.csv` end-to-end, read `git log --oneline -- solution/`, review available profiler output/benchmark traces, and identify the peak speedup achieved, which round achieved it, and the measured bottleneck. If the peak was N rounds ago and no progress since, the current approach is exhausted unless profiling evidence supports another targeted incremental attempt.
+2. **Profile-guided diagnosis**: before choosing a rewrite direction, determine from profiling evidence whether the limit is memory bandwidth, memory access pattern/coalescing, occupancy, register pressure, shared-memory behavior, synchronization, compute throughput, or launch overhead. If profiler evidence is missing, run or request the smallest relevant profiling experiment before making a major optimization decision.
+3. **Mandatory structural pivot**: if the same kernel structure has been edited for 3+ rounds without measurable improvement, you MUST rewrite the kernel from scratch using a fundamentally different approach. Do not make another incremental edit to the same code. Examples of structural pivots:
+   - Scalar loop kernel -> vectorized/tiled kernel
+   - Naive reduction -> warp shuffle reduction -> CUB/multi-stage reduction
+   - Separate kernels -> fused kernel
+   - Standard launch -> persistent kernel with cooperative groups
+4. **KernelWiki consultation**: if a KernelWiki skill is available, query it for the specific operator type and profiling-identified bottleneck. Treat KernelWiki recommendations and profiling evidence as equally important inputs when choosing the pivot direction.
+
 ## Recovery Guardrails
 
 - Do not spend this round mostly on queued cleanup

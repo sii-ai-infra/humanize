@@ -54,9 +54,15 @@ Critical blockers: [list if any]
 
 ## Part 1.5: Kernel Optimization Guidance (when applicable)
 
-If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), consult the **KernelWiki** knowledge base to assess the optimization trajectory and provide guidance. Locate KernelWiki by searching for a directory named `KernelWiki` that contains `SKILL.md` and `scripts/query.py` (common locations: `~/.codex/skills/KernelWiki`, `~/.claude/skills/KernelWiki`, or a path referenced in the plan). Read its `SKILL.md` for available query tools and usage instructions.
+If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), assess the optimization trajectory before judging alignment:
 
-During Full Alignment Checks, focus on whether the overall optimization strategy is sound. If progress has stalled, query KernelWiki for alternative approaches. Include a brief "KernelWiki Optimization Recommendations" subsection with bottleneck diagnosis, recommended techniques (with wiki page references), and suggested next direction. These suggestions are advisory and must not block the COMPLETE verdict on their own.
+**History and profiling audit**: Read `leaderboard.csv`, `docs/draft.md` if present, `git log --oneline -- solution/`, and available profiler output/benchmark traces to understand past attempts, peak speedup, rejected approaches, measured bottlenecks, and whether Claude acknowledged this history. If Claude's recent work repeats a previously rejected approach without justification, or makes optimization claims without profiling/benchmark evidence where profiling was feasible, flag this as a mainline gap.
+
+**Profile-guided bottleneck assessment**: Identify whether the evidence points to memory bandwidth, memory access pattern/coalescing, occupancy, register pressure, shared-memory behavior, synchronization, compute throughput, launch overhead, or another bottleneck. Use this profiling analysis as a primary input when judging whether the optimization strategy is sound.
+
+**Structural plateau assessment**: Check whether leaderboard speedup has plateaued across recent rounds while Claude keeps editing the same kernel structure. If the same structure has been tuned for 2+ rounds without meaningful improvement, recommend a structural rewrite or fundamentally different parallelization/data-layout strategy rather than more incremental tuning, tied to the profiling evidence where available.
+
+**KernelWiki consultation**: Consult the **KernelWiki** knowledge base to assess the optimization trajectory and provide guidance. If progress has stalled, query KernelWiki for alternative approaches relevant to the profiling-identified bottlenecks. Include a brief "Profiling and KernelWiki Optimization Recommendations" subsection with bottleneck diagnosis, profiling observations, recommended techniques (with wiki page references), and suggested next direction. Profiling analysis and KernelWiki guidance are equally important evidence sources. These suggestions are advisory and must not block the COMPLETE verdict on their own.
 
 ## Part 2: Mainline Drift Audit (MANDATORY)
 
@@ -100,15 +106,16 @@ The project's `.humanize/rlcr/{{LOOP_TIMESTAMP}}/` directory contains the histor
 
 **Your Task**: Review the historical review results, especially the **recent rounds** of development progress and review outcomes, to determine if the development has stalled.
 
-**Signs of Stagnation** (circuit breaker triggers):
-- Same issues appearing repeatedly across multiple rounds
-- No meaningful progress on Acceptance Criteria over several rounds
-- Claude making the same mistakes repeatedly
-- Circular discussions without resolution
-- No new code changes despite continued iterations
-- Codex giving similar feedback repeatedly without Claude addressing it
+**Possible Signs of Stagnation** (use judgment; these are not automatic STOP triggers):
+- Same high-impact issue persists across multiple rounds and continues to block current-scope Acceptance Criteria
+- Little or no measurable progress on current-scope Acceptance Criteria over several rounds
+- Claude repeats the same mistake after prior review feedback clearly explained the correction
+- Discussion or implementation loops back to already-rejected approaches without new evidence or rationale
+- No substantive code, test, or design changes despite continued iterations
+- Codex gives similar mainline feedback repeatedly and Claude does not address it
+- For kernel optimization tasks: leaderboard speedup has plateaued for 3+ consecutive rounds, profiling evidence does not support the repeated incremental edits to the same kernel structure, and prior review feedback already requested a structural pivot or clear justification
 
-**If development is stagnating**, write **STOP** (as a single word on its own line) as the last line of your review output @{{REVIEW_RESULT_FILE}} instead of COMPLETE.
+**STOP guidance**: Write **STOP** only when the pattern is persistent, blocks meaningful progress toward current-scope goals, and there is no credible next action likely to recover progress. Otherwise, write concrete action items and allow another round.
 
 ## Part 6: Output Requirements
 
