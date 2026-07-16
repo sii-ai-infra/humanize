@@ -169,11 +169,11 @@ if [[ -z "$QUESTION" ]]; then
     exit 1
 fi
 
-# Validate codex model for safety (alphanumeric, hyphen, underscore, dot)
-if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+# Validate codex model for safety (alphanumeric, slash, hyphen, underscore, dot)
+if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Error: Codex model contains invalid characters" >&2
     echo "  Model: $CODEX_MODEL" >&2
-    echo "  Only alphanumeric, hyphen, underscore, dot allowed" >&2
+    echo "  Only alphanumeric, slash, hyphen, underscore, dot allowed" >&2
     exit 1
 fi
 

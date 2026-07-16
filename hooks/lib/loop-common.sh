@@ -209,13 +209,8 @@ DEFAULT_BITLESSON_MODEL="${DEFAULT_BITLESSON_MODEL:-haiku}"
 # defaults for all Codex-using features (RLCR, ask-codex).
 # Precedence: pre-set by caller > config value > hardcoded fallback (gpt-5.5/high)
 _cfg_codex_model="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_model" 2>/dev/null || true)"
-if [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+if [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Warning: Invalid codex_model in merged config: $_cfg_codex_model" >&2
-    echo "  Ignoring configured codex_model; using caller preset or fallback" >&2
-    _cfg_codex_model=""
-elif [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^(gpt-|o[0-9]) ]]; then
-    echo "Warning: Unsupported codex_model in merged config: $_cfg_codex_model" >&2
-    echo "  Must start with a Codex model prefix: gpt- or o[0-9]" >&2
     echo "  Ignoring configured codex_model; using caller preset or fallback" >&2
     _cfg_codex_model=""
 fi

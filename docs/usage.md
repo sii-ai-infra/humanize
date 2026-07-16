@@ -316,7 +316,7 @@ Current built-in keys:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `codex_model` | `gpt-5.5` | Shared default model for Codex-backed review and analysis |
+| `codex_model` | `gpt-5.5` | Shared default model for Codex-backed review and analysis; any Codex CLI-supported model name is allowed |
 | `codex_effort` | `high` | Shared default reasoning effort (`xhigh`, `high`, `medium`, `low`) |
 | `bitlesson_model` | `haiku` | Model used by the BitLesson selector agent |
 | `provider_mode` | unset | Optional runtime mode hint such as `codex-only` |
@@ -326,11 +326,11 @@ Current built-in keys:
 
 ### Codex Model Configuration
 
-All Codex-using features (RLCR loop, ask-codex) share the same model configuration:
+All Codex-using features (RLCR loop, ask-codex) share the same model configuration. The value is passed through to the Codex CLI, so it may be any model name supported by your Codex installation as long as it contains only letters, numbers, slashes, dots, underscores, and hyphens:
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `codex_model` | `gpt-5.5` | Model used for Codex operations (reviews, analysis, queries) |
+| `codex_model` | `gpt-5.5` | Model used for Codex operations (reviews, analysis, queries); any Codex CLI-supported model name is allowed |
 | `codex_effort` | `high` | Reasoning effort (`xhigh`, `high`, `medium`, `low`) |
 
 To override, add to `.humanize/config.json`:
