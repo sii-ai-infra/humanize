@@ -1,6 +1,6 @@
 ---
 description: "Start iterative loop with Codex review"
-argument-hint: "[path/to/plan.md | --plan-file path/to/plan.md] [--max N] [--codex-model MODEL:EFFORT] [--codex-profile PROFILE] [--codex-timeout SECONDS] [--track-plan-file] [--push-every-round] [--base-branch BRANCH] [--full-review-round N] [--skip-impl] [--claude-answer-codex] [--agent-teams] [--yolo] [--skip-quiz] [--privacy] [--no-privacy]"
+argument-hint: "[path/to/plan.md | --plan-file path/to/plan.md] --benchmark-command COMMAND [--benchmark-timeout SECONDS] [--max N] [--codex-model MODEL:EFFORT] [--codex-profile PROFILE] [--codex-timeout SECONDS] [--track-plan-file] [--push-every-round] [--base-branch BRANCH] [--full-review-round N] [--skip-impl] [--claude-answer-codex] [--agent-teams] [--yolo] [--skip-quiz] [--privacy] [--no-privacy]"
 allowed-tools:
   - "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/setup-rlcr-loop.sh:*)"
   - "Read"
@@ -22,7 +22,7 @@ Before running the setup script, validate the plan file for compliance. This is 
 
 Parse `$ARGUMENTS` to find the plan file path:
 - If `--plan-file <path>` is present, use `<path>`
-- Otherwise, use the first positional argument (the first argument that does not start with `--` and is not a value following a known flag like `--max`, `--codex-model`, `--codex-profile`, `--codex-provider`, `--codex-timeout`, `--base-branch`, `--full-review-round`, `--plan-file`)
+- Otherwise, use the first positional argument (the first argument that does not start with `--` and is not a value following a known flag like `--max`, `--codex-model`, `--codex-profile`, `--codex-provider`, `--codex-timeout`, `--benchmark-command`, `--benchmark-timeout`, `--base-branch`, `--full-review-round`, `--plan-file`)
 - If no plan file path can be determined, skip the pre-check and let the setup script handle the error
 
 ### Basic path safety gate

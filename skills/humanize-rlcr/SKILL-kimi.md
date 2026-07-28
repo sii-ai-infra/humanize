@@ -32,7 +32,9 @@ All commands below assume `{{HUMANIZE_RUNTIME_ROOT}}`.
 Start the loop with the setup script:
 
 ```bash
-"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" $ARGUMENTS
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" \
+  $ARGUMENTS \
+  --benchmark-command '<project full benchmark command>'
 ```
 
 If setup exits non-zero, stop and report the error.
@@ -61,6 +63,10 @@ GATE_EXIT=$?
    - `0`: loop is allowed to exit (done).
    - `10`: blocked by RLCR logic. Follow returned instructions exactly, continue next round.
    - `20`: infrastructure error (wrapper/hook/runtime). Report error, do not fake completion.
+
+The gate runs the configured full benchmark once per normal round before
+review. It records `round-N-benchmark.md` and `round-N-benchmark.log` even when
+the command fails or times out.
 
 ## What This Enforces
 
@@ -101,6 +107,8 @@ Pass these through `setup-rlcr-loop.sh`:
 | `--codex-model MODEL:EFFORT` | Codex model and effort for `codex exec` and review | gpt-5.5:high |
 | `--codex-profile PROFILE` | Codex config profile passed as `codex -p PROFILE` for exec and review | none |
 | `--codex-timeout SECONDS` | Codex timeout | 5400 |
+| `--benchmark-command COMMAND` | Required full benchmark command, run by the gate every round | required |
+| `--benchmark-timeout SECONDS` | Full benchmark timeout; timeout is recorded as exit 124 | 5400 |
 | `--base-branch BRANCH` | Base for review phase | auto-detect |
 | `--full-review-round N` | Full alignment interval | 5 |
 | `--skip-impl` | Start directly in review path | false |

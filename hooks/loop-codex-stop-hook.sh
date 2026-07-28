@@ -1019,6 +1019,59 @@ REVIEW_RESULT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-review-result.md"
 
 SUMMARY_CONTENT=$(cat "$SUMMARY_FILE")
 
+# ========================================
+# Mandatory Full Benchmark (every normal round)
+# ========================================
+
+if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
+    BENCHMARK_COMMAND_FILE="$LOOP_DIR/benchmark-command.sh"
+    BENCHMARK_TIMEOUT_FILE="$LOOP_DIR/benchmark-timeout"
+    BENCHMARK_RESULT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-benchmark.md"
+    BENCHMARK_LOG_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-benchmark.log"
+
+    if [[ ! -s "$BENCHMARK_COMMAND_FILE" || ! -s "$BENCHMARK_TIMEOUT_FILE" ]]; then
+        jq -n \
+            --arg reason "Mandatory full benchmark configuration is missing. Restart RLCR with --benchmark-command '<full benchmark command>'." \
+            --arg msg "Loop: blocked - full benchmark configuration missing" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+    fi
+
+    BENCHMARK_TIMEOUT=$(cat "$BENCHMARK_TIMEOUT_FILE")
+    if ! [[ "$BENCHMARK_TIMEOUT" =~ ^[0-9]+$ ]] || [[ "$BENCHMARK_TIMEOUT" -lt 1 ]]; then
+        jq -n \
+            --arg reason "Mandatory full benchmark timeout is invalid. Restart RLCR with a positive --benchmark-timeout." \
+            --arg msg "Loop: blocked - invalid full benchmark timeout" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+    fi
+
+    bash "$PLUGIN_ROOT/scripts/run-round-benchmark.sh" \
+        --project-root "$PROJECT_ROOT" \
+        --loop-dir "$LOOP_DIR" \
+        --round "$CURRENT_ROUND" \
+        --command-file "$BENCHMARK_COMMAND_FILE" \
+        --timeout "$BENCHMARK_TIMEOUT"
+
+    if [[ ! -s "$BENCHMARK_RESULT_FILE" || ! -f "$BENCHMARK_LOG_FILE" ]]; then
+        jq -n \
+            --arg reason "The mandatory full benchmark did not produce its result and log artifacts. Fix the benchmark runner before review." \
+            --arg msg "Loop: blocked - full benchmark evidence missing" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+    fi
+
+    BENCHMARK_EVIDENCE=$(cat "$BENCHMARK_RESULT_FILE")
+    SUMMARY_CONTENT="${SUMMARY_CONTENT}
+
+## Stop-gate Full Benchmark Evidence
+
+${BENCHMARK_EVIDENCE}
+
+The benchmark was mandatory for this round. A failed or timed-out run is still
+valid recorded evidence, but its impact must be assessed before completion."
+fi
+
 # Shared prompt section for Goal Tracker Update Requests (used in both Full Alignment and Regular reviews)
 GOAL_TRACKER_SECTION_FALLBACK="## Goal Tracker Updates
 If Claude's summary includes a Goal Tracker Update Request section, apply the requested changes to {{GOAL_TRACKER_FILE}}."

@@ -16,6 +16,7 @@ set -euo pipefail
 
 # DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT are provided by loop-common.sh
 DEFAULT_CODEX_TIMEOUT=5400
+DEFAULT_BENCHMARK_TIMEOUT=5400
 DEFAULT_MAX_ITERATIONS=42
 DEFAULT_FULL_REVIEW_ROUND=15
 
@@ -54,6 +55,8 @@ ASK_CODEX_QUESTION="true"
 AGENT_TEAMS="${DEFAULT_AGENT_TEAMS:-false}"
 BITLESSON_ALLOW_EMPTY_NONE="true"
 PRIVACY_MODE="true"
+BENCHMARK_COMMAND="${HUMANIZE_BENCHMARK_COMMAND:-}"
+BENCHMARK_TIMEOUT="$DEFAULT_BENCHMARK_TIMEOUT"
 
 extract_plan_goal_content() {
     local plan_path="$1"
@@ -110,6 +113,10 @@ OPTIONS:
                        Codex config profile to pass as `codex -p PROFILE` for exec/review (default: ${DEFAULT_CODEX_PROFILE:-none})
   --codex-timeout <SECONDS>
                        Timeout for each Codex review in seconds (default: 5400)
+  --benchmark-command <COMMAND>
+                       Required full benchmark command, run once before every round review
+  --benchmark-timeout <SECONDS>
+                       Timeout for each full benchmark (default: 5400)
   --push-every-round   Require git push after each round (default: commits stay local)
   --base-branch <BRANCH>
                        Base branch for code review phase (default: auto-detect)
@@ -241,6 +248,22 @@ while [[ $# -gt 0 ]]; do
             CODEX_TIMEOUT="$2"
             shift 2
             ;;
+        --benchmark-command)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --benchmark-command requires a non-empty shell command" >&2
+                exit 1
+            fi
+            BENCHMARK_COMMAND="$2"
+            shift 2
+            ;;
+        --benchmark-timeout)
+            if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
+                echo "Error: --benchmark-timeout must be a positive integer" >&2
+                exit 1
+            fi
+            BENCHMARK_TIMEOUT="$2"
+            shift 2
+            ;;
         --push-every-round)
             PUSH_EVERY_ROUND="true"
             shift
@@ -334,6 +357,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -z "$BENCHMARK_COMMAND" ]]; then
+    echo "Error: A full benchmark command is required for RLCR." >&2
+    echo "Pass --benchmark-command '<command>' or set HUMANIZE_BENCHMARK_COMMAND." >&2
+    exit 1
+fi
 
 # ========================================
 # Validate Prerequisites
@@ -931,6 +960,11 @@ started_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ---
 EOF
 
+# Keep arbitrary shell syntax out of YAML. Validators protect loop control files
+# from agent edits; the Stop gate reads this setup-owned command verbatim.
+printf '%s' "$BENCHMARK_COMMAND" > "$LOOP_DIR/benchmark-command.sh"
+printf '%s\n' "$BENCHMARK_TIMEOUT" > "$LOOP_DIR/benchmark-timeout"
+
 # Create signal file for PostToolUse hook to record session_id
 # The hook will read the session_id from its JSON input and patch state.md
 # Format: line 1 = state file path, line 2 = command marker for verification
@@ -1200,6 +1234,10 @@ write_summary_template() {
 ## Validation
 
 [List tests/commands run and outcomes]
+
+The Stop gate will run the configured full benchmark and create
+`round-0-benchmark.md` plus `round-0-benchmark.log`. Do not substitute a smoke
+test for that mandatory run.
 
 ## Remaining Items
 

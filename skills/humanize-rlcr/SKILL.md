@@ -28,7 +28,9 @@ All commands below assume `{{HUMANIZE_RUNTIME_ROOT}}`.
 Start the loop with the setup script:
 
 ```bash
-"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" $ARGUMENTS
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" \
+  $ARGUMENTS \
+  --benchmark-command '<project full benchmark command>'
 ```
 
 If setup exits non-zero, stop and report the error.
@@ -53,6 +55,11 @@ For each round:
 6. Treat `rlcr-stop-gate.sh` exit `10` exactly like a blocked native hook: follow the returned instructions and continue the next round. Treat exit `20` as a runtime error to fix/report. Exit `0` means the gate allowed stopping.
 7. Do not send a user-facing "round complete" report between writing a summary and running the hook/gate. A `round-N-summary.md` without `round-N-review-result.md` is not a stopping point.
 8. When the hook/gate creates `round-(N+1)-prompt.md`, continue RLCR from that prompt immediately unless the hook reports `COMPLETE`, a true blocker, or the user interrupts.
+
+The gate runs the configured **full benchmark once per normal round** before
+review. It records `round-N-benchmark.md` and `round-N-benchmark.log` even when
+the command fails or times out. Benchmark failure does not erase the evidence
+or bypass review.
 
 ## What This Enforces
 
@@ -94,6 +101,8 @@ Pass these through `setup-rlcr-loop.sh`:
 | `--codex-model MODEL:EFFORT` | Codex model and effort for `codex exec` and review | gpt-5.5:high |
 | `--codex-profile PROFILE` | Codex config profile passed as `codex -p PROFILE` for exec and review | none |
 | `--codex-timeout SECONDS` | Codex timeout | 5400 |
+| `--benchmark-command COMMAND` | Required full benchmark command, run by the gate every round | required |
+| `--benchmark-timeout SECONDS` | Full benchmark timeout; timeout is recorded as exit 124 | 5400 |
 | `--base-branch BRANCH` | Base for review phase | auto-detect |
 | `--full-review-round N` | Full alignment interval | 5 |
 | `--skip-impl` | Start directly in review path | false |

@@ -62,10 +62,14 @@ Transforms a rough draft document into a structured implementation plan with:
 
 ```bash
 # With a plan file
-"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" path/to/plan.md
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" \
+  path/to/plan.md \
+  --benchmark-command '<project full benchmark command>'
 
 # Or without plan (review-only mode)
-"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" --skip-impl
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/setup-rlcr-loop.sh" \
+  --skip-impl \
+  --benchmark-command '<project full benchmark command>'
 ```
 
 After each round, write the required summary and trigger the Humanize review gate. In a normal interactive Codex CLI session, stop/exit normally so the native Codex `Stop` hook runs automatically. In API/HAPI/app-server/skill workflow surfaces, or whenever a normal assistant stop did not run the hook, run the same gate explicitly:
@@ -81,6 +85,8 @@ Treat exit `10` as a blocked hook result and follow its instructions; exit `20` 
 - `--codex-model MODEL:EFFORT` - Codex model and reasoning effort for `codex exec` and review (default: gpt-5.5:high)
 - `--codex-profile PROFILE` - Codex config profile passed as `codex -p PROFILE` for exec and review
 - `--codex-timeout SECONDS` - Timeout for each Codex review (default: 5400)
+- `--benchmark-command COMMAND` - Required full benchmark command; the Stop gate runs it once every round
+- `--benchmark-timeout SECONDS` - Full benchmark timeout (default: 5400); failures/timeouts are recorded and reviewed
 - `--base-branch BRANCH` - Base branch for code review (auto-detects if not specified)
 - `--full-review-round N` - Interval for full alignment checks (default: 5)
 - `--skip-impl` - Skip implementation phase, go directly to code review
@@ -179,6 +185,9 @@ The RLCR loop uses a Goal Tracker to prevent goal drift:
 5. **Use the Humanize Stop gate**: After writing the required summary, rely on native Codex `Stop` hooks when the current surface emits them; otherwise immediately run `scripts/rlcr-stop-gate.sh --project-root <task-root>`. This wrapper invokes the same hook logic and is the required fallback for HAPI/API/app-server workflows.
 6. **No round-complete pauses**: A `round-N-summary.md` without `round-N-review-result.md` is not a completion point. Continue from the hook-generated next prompt until `COMPLETE`, a true blocker, or user interruption.
 7. **Trust the process**: External review helps improve implementation quality
+8. **Benchmark every round**: The Stop gate must create `round-N-benchmark.md`
+   and `round-N-benchmark.log` before review. Failed and timed-out full runs are
+   evidence and must never be silently skipped.
 
 ## Prerequisites
 
