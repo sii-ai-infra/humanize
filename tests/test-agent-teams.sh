@@ -27,6 +27,7 @@ echo "=========================================="
 echo ""
 
 SETUP_SCRIPT="$SCRIPT_DIR/../scripts/setup-rlcr-loop.sh"
+BENCHMARK_ARGS=(--benchmark-command true --benchmark-timeout 10)
 
 # ========================================
 # Test: --agent-teams fails without CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS
@@ -53,7 +54,7 @@ git commit -q -m "Add gitignore"
 
 # Run setup with --agent-teams but WITHOUT env var
 cd "$TEST_DIR/project"
-SETUP_OUTPUT=$(CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="" CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" --agent-teams temp/plan.md 2>&1) || SETUP_EXIT=$?
+SETUP_OUTPUT=$(CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="" CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" --agent-teams temp/plan.md 2>&1) || SETUP_EXIT=$?
 
 if [[ "${SETUP_EXIT:-0}" -ne 0 ]]; then
     pass "setup with --agent-teams fails without env var"
@@ -70,7 +71,7 @@ fi
 
 # Test: --agent-teams rejects non-"1" values like "0" and "false"
 for BAD_VALUE in "0" "false" "yes" "true"; do
-    SETUP_OUTPUT=$(CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="$BAD_VALUE" CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" --agent-teams temp/plan.md 2>&1) || SETUP_EXIT=$?
+    SETUP_OUTPUT=$(CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS="$BAD_VALUE" CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" --agent-teams temp/plan.md 2>&1) || SETUP_EXIT=$?
     if [[ "${SETUP_EXIT:-0}" -ne 0 ]]; then
         pass "setup rejects CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=$BAD_VALUE"
     else
@@ -101,7 +102,7 @@ git add .gitignore
 git commit -q -m "Add gitignore"
 
 cd "$TEST_DIR/project"
-CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" --agent-teams temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" --agent-teams temp/plan.md > /dev/null 2>&1 || true
 
 STATE_FILE=$(find "$TEST_DIR/project/.humanize/rlcr" -name "state.md" -type f 2>/dev/null | head -1)
 if [[ -n "$STATE_FILE" ]]; then
@@ -143,7 +144,7 @@ git add .gitignore
 git commit -q -m "Add gitignore"
 
 cd "$TEST_DIR/project"
-CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" temp/plan.md > /dev/null 2>&1 || true
 
 STATE_FILE=$(find "$TEST_DIR/project/.humanize/rlcr" -name "state.md" -type f 2>/dev/null | head -1)
 if [[ -n "$STATE_FILE" ]] && grep -q "^agent_teams: false" "$STATE_FILE"; then
@@ -176,7 +177,7 @@ git add .gitignore
 git commit -q -m "Add gitignore"
 
 cd "$TEST_DIR/project"
-CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" temp/plan.md > /dev/null 2>&1 || true
 
 STATE_FILE=$(find "$TEST_DIR/project/.humanize/rlcr" -name "state.md" -type f 2>/dev/null | head -1)
 if [[ -n "$STATE_FILE" ]] && grep -q "^agent_teams: true" "$STATE_FILE"; then
@@ -264,7 +265,7 @@ git add .gitignore
 git commit -q -m "Add gitignore"
 
 cd "$TEST_DIR/project"
-CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" --agent-teams temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" --agent-teams temp/plan.md > /dev/null 2>&1 || true
 
 PROMPT_FILE=$(find "$TEST_DIR/project/.humanize/rlcr" -name "round-0-prompt.md" -type f 2>/dev/null | head -1)
 
@@ -313,7 +314,7 @@ git add .gitignore
 git commit -q -m "Add gitignore"
 
 cd "$TEST_DIR/project"
-CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" "${BENCHMARK_ARGS[@]}" temp/plan.md > /dev/null 2>&1 || true
 
 PROMPT_FILE=$(find "$TEST_DIR/project/.humanize/rlcr" -name "round-0-prompt.md" -type f 2>/dev/null | head -1)
 
@@ -494,6 +495,9 @@ drift_status: normal
 ---
 STATE_EOF
 
+    printf '%s' 'true' > "$LOOP_DIR/benchmark-command.sh"
+    printf '%s\n' 10 > "$LOOP_DIR/benchmark-timeout"
+
     # Create plan backup and goal tracker
     cp plans/test-plan.md "$LOOP_DIR/plan.md"
     cat > "$LOOP_DIR/goal-tracker.md" << 'GT_EOF'
@@ -654,7 +658,7 @@ set -e
 
 NEXT_PROMPT="$LOOP_DIR/round-4-prompt.md"
 if [[ -f "$NEXT_PROMPT" ]]; then
-    if grep -q "Drift Recovery Mode" "$NEXT_PROMPT"; then
+    if echo "$RESULT" | grep -q "Mainline drift detected, replan required"; then
         pass "drift recovery prompt generated for stalled mainline"
     else
         fail "drift recovery prompt generated for stalled mainline" "Drift Recovery Mode" "not found"

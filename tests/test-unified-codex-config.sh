@@ -618,7 +618,7 @@ PLAN_EOF
 
     # Run setup-rlcr-loop.sh with --codex-model override
     setup_exit=0
-    output=$(cd "$EXEC_PROJECT" && CLAUDE_PROJECT_DIR="$EXEC_PROJECT" run_with_timeout 30 bash "$SETUP_SCRIPT" --codex-profile glm --codex-model glm-5.3:xhigh --base-branch master --track-plan-file plan.md 2>&1) || setup_exit=$?
+    output=$(cd "$EXEC_PROJECT" && CLAUDE_PROJECT_DIR="$EXEC_PROJECT" run_with_timeout 30 bash "$SETUP_SCRIPT" --benchmark-command true --benchmark-timeout 10 --codex-profile glm --codex-model glm-5.3:xhigh --base-branch master --track-plan-file plan.md 2>&1) || setup_exit=$?
 
     assert_eq "setup execution: setup-rlcr-loop.sh exited successfully" \
         "0" "$setup_exit"

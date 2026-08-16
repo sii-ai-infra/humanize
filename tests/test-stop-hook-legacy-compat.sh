@@ -86,6 +86,9 @@ agent_teams: false
 ---
 EOF
 
+    printf '%s' 'true' > "$loop_dir/benchmark-command.sh"
+    printf '%s\n' 10 > "$loop_dir/benchmark-timeout"
+
     # Intentionally omit BitLesson Delta in the summary so the legacy
     # bitlesson_required fallback would block before Codex if it regresses.
     cat > "$loop_dir/round-0-summary.md" << 'EOF'

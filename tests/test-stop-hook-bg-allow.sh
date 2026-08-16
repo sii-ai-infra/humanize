@@ -148,6 +148,9 @@ agent_teams: false
 ---
 EOF
 
+    printf '%s' 'true' > "$loop_dir/benchmark-command.sh"
+    printf '%s\n' 10 > "$loop_dir/benchmark-timeout"
+
     local summary_name="round-0-summary.md"
     if [[ "$finalize_phase" == "true" ]]; then
         summary_name="finalize-summary.md"

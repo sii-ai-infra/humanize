@@ -255,7 +255,7 @@ echo ""
 
 exit_code=0
 stderr_out=""
-stderr_out=$(PATH="$SAFE_BASE_PATH" check_provider_dependency "codex" 2>&1 >/dev/null) || exit_code=$?
+    stderr_out=$(cd "$TEST_DIR" && hash -r && PATH="" check_provider_dependency "codex" 2>&1 >/dev/null) || exit_code=$?
 
 if [[ $exit_code -ne 0 ]] && echo "$stderr_out" | grep -qi "codex"; then
     pass "check_provider_dependency: codex fails when codex is missing"

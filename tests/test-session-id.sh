@@ -54,7 +54,7 @@ git commit -q -m "Add gitignore"
 # Run setup script
 SETUP_SCRIPT="$SCRIPT_DIR/../scripts/setup-rlcr-loop.sh"
 cd "$TEST_DIR/project"
-CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" --benchmark-command true --benchmark-timeout 10 temp/plan.md > /dev/null 2>&1 || true
 
 # Find the state file
 STATE_FILE=$(find "$TEST_DIR/project/.humanize/rlcr" -name "state.md" -type f 2>/dev/null | head -1)
@@ -807,7 +807,7 @@ git add .gitignore
 git commit -q -m "Add gitignore"
 
 cd "$TEST_DIR/project"
-CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" temp/plan.md > /dev/null 2>&1 || true
+CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$SETUP_SCRIPT" --benchmark-command true --benchmark-timeout 10 temp/plan.md > /dev/null 2>&1 || true
 
 SIGNAL_FILE="$TEST_DIR/project/.humanize/.pending-session-id"
 if [[ -f "$SIGNAL_FILE" ]]; then

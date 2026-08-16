@@ -235,6 +235,9 @@ started_at: 2024-01-01T12:00:00Z
 ---
 EOF
 
+    printf '%s' 'true' > "$LOOP_DIR/benchmark-command.sh"
+    printf '%s\n' 10 > "$LOOP_DIR/benchmark-timeout"
+
     # Create plan backup
     cp plans/test-plan.md "$LOOP_DIR/plan.md"
 

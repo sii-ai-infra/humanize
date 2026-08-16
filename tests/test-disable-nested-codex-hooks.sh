@@ -166,6 +166,9 @@ agent_teams: false
 ---
 EOF
 
+    printf '%s' 'true' > "$loop_dir/benchmark-command.sh"
+    printf '%s\n' 10 > "$loop_dir/benchmark-timeout"
+
     cp "$repo_dir/plans/test-plan.md" "$loop_dir/plan.md"
     cat > "$loop_dir/goal-tracker.md" <<'EOF'
 # Goal Tracker
@@ -215,7 +218,8 @@ REPO_IMPL="$TEST_DIR/repo-impl"
 setup_repo "$REPO_IMPL"
 run_loop_hook "$REPO_IMPL" "$TEST_DIR/impl.args" "false"
 
-if grep -q -- 'exec --disable hooks --disable plugin_hooks --disable codex_hooks' "$TEST_DIR/impl.args"; then
+if grep -q -- '--disable hooks --disable plugin_hooks --disable codex_hooks' "$TEST_DIR/impl.args" \
+    && grep -q -- ' exec ' "$TEST_DIR/impl.args"; then
     pass "implementation-phase stop hook disables all known hook features for codex exec"
 else
     fail "implementation-phase stop hook disables all known hook features for codex exec" \
@@ -226,7 +230,8 @@ REPO_REVIEW="$TEST_DIR/repo-review"
 setup_repo "$REPO_REVIEW"
 run_loop_hook "$REPO_REVIEW" "$TEST_DIR/review.args" "true"
 
-if grep -q -- 'review --disable hooks --disable plugin_hooks --disable codex_hooks' "$TEST_DIR/review.args"; then
+if grep -q -- '--disable hooks --disable plugin_hooks --disable codex_hooks' "$TEST_DIR/review.args" \
+    && grep -q -- ' review ' "$TEST_DIR/review.args"; then
     pass "review-phase stop hook disables all known hook features for codex review"
 else
     fail "review-phase stop hook disables all known hook features for codex review" \
@@ -263,7 +268,8 @@ REPO_LEGACY="$TEST_DIR/repo-legacy"
 setup_repo "$REPO_LEGACY"
 run_loop_hook "$REPO_LEGACY" "$TEST_DIR/legacy.args" "false" "codex_hooks"
 
-if grep -q -- 'exec --disable codex_hooks' "$TEST_DIR/legacy.args" \
+if grep -q -- '--disable codex_hooks' "$TEST_DIR/legacy.args" \
+    && grep -q -- ' exec ' "$TEST_DIR/legacy.args" \
     && ! grep -q -- '--disable hooks' "$TEST_DIR/legacy.args" \
     && ! grep -q -- 'plugin_hooks' "$TEST_DIR/legacy.args"; then
     pass "implementation-phase stop hook disables only supported legacy hook feature"

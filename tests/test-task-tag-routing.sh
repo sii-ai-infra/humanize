@@ -91,7 +91,7 @@ Implement and validate feature behavior.
 create_mock_codex "$TEST_DIR/repo-routing/bin"
 
 cd "$TEST_DIR/repo-routing"
-PATH="$TEST_DIR/repo-routing/bin:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR/repo-routing" bash "$SETUP_SCRIPT" plans/plan.md > /dev/null 2>&1
+PATH="$TEST_DIR/repo-routing/bin:$PATH" CLAUDE_PROJECT_DIR="$TEST_DIR/repo-routing" bash "$SETUP_SCRIPT" --benchmark-command true --benchmark-timeout 10 plans/plan.md > /dev/null 2>&1
 
 PROMPT_FILE=$(find "$TEST_DIR/repo-routing/.humanize/rlcr" -name "round-0-prompt.md" -type f | head -1)
 GOAL_TRACKER_FILE=$(find "$TEST_DIR/repo-routing/.humanize/rlcr" -name "goal-tracker.md" -type f | head -1)
@@ -171,6 +171,8 @@ full_review_round: 5
 session_id:
 ---
 EOF
+    printf '%s' 'true' > "$loop_dir/benchmark-command.sh"
+    printf '%s\n' 10 > "$loop_dir/benchmark-timeout"
     cp "$repo_dir/plans/plan.md" "$loop_dir/plan.md"
     cat > "$loop_dir/goal-tracker.md" << 'EOF'
 # Goal Tracker

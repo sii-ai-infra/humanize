@@ -88,7 +88,7 @@ run_rlcr_setup() {
         cd "$repo_dir"
         # Set CLAUDE_PROJECT_DIR to isolate from any real active loops
         # Preserve PATH to ensure git/gh/etc are available
-        CLAUDE_PROJECT_DIR="$repo_dir" "$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "$@"
+        CLAUDE_PROJECT_DIR="$repo_dir" "$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --benchmark-command true --benchmark-timeout 10 "$@"
     )
 }
 

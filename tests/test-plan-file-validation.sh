@@ -15,6 +15,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BENCHMARK_ARGS=(--benchmark-command true --benchmark-timeout 10)
 
 # Unset CLAUDE_PROJECT_DIR so setup-rlcr-loop.sh uses pwd (the temp test repo)
 # instead of the actual repo root where this test is running
@@ -91,7 +92,7 @@ mock_codex
 
 echo "Test 1: Reject absolute path"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "/absolute/path/plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "/absolute/path/plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "relative path"; then
@@ -103,7 +104,7 @@ fi
 # Test 2: Non-existent file should fail
 echo "Test 2: Reject non-existent file"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "nonexistent.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "nonexistent.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "not found"; then
@@ -115,7 +116,7 @@ fi
 # Test 2.5: Non-existent directory should fail with clear error
 echo "Test 2.5: Reject non-existent parent directory"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "nonexistent-dir/plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "nonexistent-dir/plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "directory not found"; then
@@ -136,7 +137,7 @@ Test spaces
 - Requirement 2
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "path with spaces/plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "path with spaces/plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "cannot contain spaces"; then
@@ -156,7 +157,7 @@ Test spaces
 - Requirement 2
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plan with spaces.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plan with spaces.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "cannot contain spaces"; then
@@ -177,7 +178,7 @@ Test metacharacters
 EOF
 # Test various shell metacharacters
 for meta_char in ';' '&' '|' '$' '`' '<' '>' '(' ')' '{' '}' '[' ']' '!' '#' '~' '*' '?'; do
-    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/test${meta_char}plan.md" 2>&1) || true
+    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/test${meta_char}plan.md" 2>&1) || true
     if ! echo "$RESULT" | grep -q "shell metacharacters"; then
         fail "Shell metacharacter rejection ($meta_char)" "error mentioning metacharacters" "$RESULT"
         break
@@ -189,7 +190,7 @@ pass "Path with shell metacharacters rejected"
 echo "Test 3: Reject symbolic link"
 ln -sf plans/test-plan.md "$TEST_DIR/link-plan.md"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "link-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "link-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "symbolic link"; then
@@ -225,7 +226,7 @@ git -c commit.gpgsign=false commit -q -m "Gitignore"
 # Make the plans directory unreadable (if we have permission to do so)
 if chmod 000 plans 2>/dev/null; then
     set +e
-    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/plan.md" 2>&1)
+    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/plan.md" 2>&1)
     EXIT_CODE=$?
     set -e
     # Restore permissions for cleanup
@@ -261,7 +262,7 @@ echo "init" > init.txt
 git add init.txt
 git -c commit.gpgsign=false commit -q -m "Initial"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "../outside/escape-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "../outside/escape-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -qE "(within project|not found)"; then
@@ -284,7 +285,7 @@ Test non-git
 - Requirement 2
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 rm -rf "$NOGIT_DIR"
@@ -310,7 +311,7 @@ Test no commits
 - Requirement 2
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 rm -rf "$NOCOMMIT_DIR"
@@ -348,7 +349,7 @@ EOF
 git add tracked-plan.md
 git -c commit.gpgsign=false commit -q -m "Add plan"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "tracked-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "tracked-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "gitignored"; then
@@ -382,7 +383,7 @@ echo "plans/" >> .gitignore
 git add .gitignore
 git -c commit.gpgsign=false commit -q -m "Gitignore"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --track-plan-file "plans/untracked-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --track-plan-file "plans/untracked-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "tracked in git"; then
@@ -415,7 +416,7 @@ git add modified-plan.md
 git -c commit.gpgsign=false commit -q -m "Add plan"
 echo "# Extra line" >> modified-plan.md
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --track-plan-file "modified-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --track-plan-file "modified-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "clean"; then
@@ -459,7 +460,7 @@ git -c commit.gpgsign=false commit -q -m "Gitignore"
 # Try to create branch with colon (YAML-unsafe) - git may reject this
 if git checkout -q -b "feature:test" 2>/dev/null; then
     set +e
-    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/plan.md" 2>&1)
+    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/plan.md" 2>&1)
     EXIT_CODE=$?
     set -e
     if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "YAML-unsafe"; then
@@ -479,7 +480,7 @@ git checkout -q "$BRANCH_TEST_DEFAULT" 2>/dev/null || true
 # Try to create a branch with hash - some git versions may not allow this
 if git checkout -q -b "test#comment" 2>/dev/null; then
     set +e
-    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/plan.md" 2>&1)
+    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/plan.md" 2>&1)
     EXIT_CODE=$?
     set -e
     if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "YAML-unsafe"; then
@@ -497,7 +498,7 @@ echo "Test 9.7: Reject branch with quotes (YAML-unsafe)"
 git checkout -q "$BRANCH_TEST_DEFAULT" 2>/dev/null || true
 if git checkout -q -b 'test"quote' 2>/dev/null; then
     set +e
-    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/plan.md" 2>&1)
+    RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/plan.md" 2>&1)
     EXIT_CODE=$?
     set -e
     if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "YAML-unsafe"; then
@@ -533,7 +534,7 @@ echo "plans/" >> .gitignore
 git add .gitignore
 git -c commit.gpgsign=false commit -q -m "Gitignore"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/blank-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/blank-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "insufficient content"; then
@@ -554,7 +555,7 @@ Only one more line
 
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/sparse-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/sparse-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "insufficient content"; then
@@ -577,7 +578,7 @@ that spans multiple lines
 -->
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/comment-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/comment-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "insufficient content"; then
@@ -597,7 +598,7 @@ cat > plans/hash-comment-plan.md << 'EOF'
 # This is a comment line 6
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/hash-comment-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/hash-comment-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "insufficient content"; then
@@ -623,7 +624,7 @@ Implementation
 Details here.
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/good-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/good-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 # Should not fail due to content validation (may fail later for other reasons like codex)
@@ -649,7 +650,7 @@ Requirements
 - Requirement 3
 EOF
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "plans/single-line-html-comment-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" "plans/single-line-html-comment-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 # Should not fail due to content validation - single-line comments should be skipped properly
@@ -670,7 +671,7 @@ setup_test_repo
 mock_codex
 set +e
 # This should fail validation (not actually run), but pass CLI parsing
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --plan-file "plans/test-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --plan-file "plans/test-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 # Should get past CLI parsing - either run or fail on some validation
@@ -684,7 +685,7 @@ fi
 echo "Test 11: Reject both --plan-file and positional"
 rm -rf "$TEST_DIR/.humanize/rlcr" 2>/dev/null || true
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --plan-file "plans/a.md" "plans/b.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --plan-file "plans/a.md" "plans/b.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "Cannot specify both"; then
@@ -704,7 +705,7 @@ setup_test_repo
 mock_codex
 rm -rf "$TEST_DIR/.humanize/rlcr" 2>/dev/null || true
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --codex-model 'model$inject:high' "plans/test-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --codex-model 'model$inject:high' "plans/test-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "invalid characters"; then
@@ -717,7 +718,7 @@ fi
 echo "Test 13: Reject codex effort with YAML-unsafe characters"
 rm -rf "$TEST_DIR/.humanize/rlcr" 2>/dev/null || true
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --codex-model "gpt-5.5:high#comment" "plans/test-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --codex-model "gpt-5.5:high#comment" "plans/test-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 if [[ $EXIT_CODE -ne 0 ]] && echo "$RESULT" | grep -q "Invalid codex effort"; then
@@ -729,7 +730,7 @@ fi
 # Test 14: Accept valid codex model with dots and hyphens
 echo "Test 14: Accept valid codex model (alphanumeric, dots, hyphens)"
 set +e
-RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" --codex-model "gpt-5.5:medium" "plans/test-plan.md" 2>&1)
+RESULT=$("$PROJECT_ROOT/scripts/setup-rlcr-loop.sh" "${BENCHMARK_ARGS[@]}" --codex-model "gpt-5.5:medium" "plans/test-plan.md" 2>&1)
 EXIT_CODE=$?
 set -e
 # Should not fail due to model/effort validation (may fail later for other reasons)
