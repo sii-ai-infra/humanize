@@ -34,6 +34,7 @@ _METHODOLOGY_ANALYSIS_LOADED=1
 # Returns:
 #   0 - analysis phase entered, block JSON has been output, caller should exit 0
 #   1 - analysis should be skipped (privacy on, already done, or re-entry)
+#   4 - an inflight reviewer could not be mechanically proven terminated
 #
 enter_methodology_analysis_phase() {
     local exit_reason="$1"
@@ -61,16 +62,6 @@ enter_methodology_analysis_phase() {
         fi
     fi
 
-    # Rename current state file to methodology-analysis-state.md
-    mv "$STATE_FILE" "$LOOP_DIR/methodology-analysis-state.md"
-    echo "State file renamed to: $LOOP_DIR/methodology-analysis-state.md" >&2
-
-    # Record the original exit reason so the completion handler can finalize
-    echo "$exit_reason" > "$LOOP_DIR/.methodology-exit-reason"
-
-    # Create empty placeholder for the completion artifact
-    touch "$LOOP_DIR/methodology-analysis-done.md"
-
     # Render prompt template
     local fallback="# Methodology Analysis Phase
 
@@ -86,15 +77,103 @@ When done, write a completion note to $LOOP_DIR/methodology-analysis-done.md."
         "CURRENT_ROUND=$CURRENT_ROUND" \
         "MAX_ITERATIONS=$MAX_ITERATIONS")
 
-    # Output block JSON with the rendered prompt
+    local scope_dir="${LOOP_BASE_DIR:-$(dirname "$LOOP_DIR")}" convergence_digest=""
+    if [[ -n "${RLCR_ACTION_ID:-}" && -n "${RLCR_ACTION_EPOCH:-}" \
+       && -n "${RLCR_REDUCER_ACTION:-}" ]]; then
+        convergence_digest="${RLCR_CONVERGENCE_DIGEST:-}"
+        [[ "$convergence_digest" =~ ^[0-9a-f]{64}$ ]] \
+            || convergence_digest=$(printf 'rlcr-no-convergence-v1\n' | rlcr_sha256_stream)
+        if ! rlcr_action_bind "$scope_dir" "$LOOP_DIR" "$convergence_digest" \
+            "$RLCR_REDUCER_ACTION" "$RLCR_REDUCER_VERSION"; then
+            return 4
+        fi
+    fi
+
+    local decision_file="$LOOP_DIR/.methodology-decision.prepare.$$"
     jq -n \
+        --arg action_id "${RLCR_ACTION_ID:-}" \
+        --arg version "${RLCR_REDUCER_VERSION:-}" \
+        --arg digest "$convergence_digest" \
+        --arg next_phase "${RLCR_REDUCER_NEXT_PHASE:-methodology-analysis}" \
+        --arg kind "${RLCR_REDUCER_ACTION:-terminal_exhausted}" \
         --arg reason "$analysis_prompt" \
         --arg msg "Loop: Methodology Analysis Phase - analyzing development methodology" \
         '{
+            action_id: $action_id,
+            reducer_version: $version,
+            convergence_digest: $digest,
+            action: {next_phase: $next_phase, payload: {kind: $kind}},
             "decision": "block",
             "reason": $reason,
             "systemMessage": $msg
-        }'
+        }' > "$decision_file"
+
+    local exit_prepare="$LOOP_DIR/.methodology-exit-reason.prepare.$$"
+    local done_prepare="$LOOP_DIR/.methodology-analysis-done.prepare.$$"
+    local manifest="$LOOP_DIR/.methodology-sidecars.prepare.$$"
+    printf '%s\n' "$exit_reason" > "$exit_prepare"
+    : > "$done_prepare"
+    {
+        printf '%s\t%s\n' "$exit_prepare" "$LOOP_DIR/.methodology-exit-reason"
+        printf '%s\t%s\n' "$done_prepare" "$LOOP_DIR/methodology-analysis-done.md"
+    } > "$manifest"
+
+    if [[ -n "${RLCR_ACTION_ID:-}" && -n "${RLCR_ACTION_EPOCH:-}" ]]; then
+        RLCR_ACTION_SIDECAR_MANIFEST="$manifest"
+        if rlcr_action_commit_phase "$scope_dir" "$LOOP_DIR" \
+            "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$decision_file" \
+            "$STATE_FILE" "$LOOP_DIR/methodology-analysis-state.md" \
+            "last_convergence_digest=$convergence_digest" \
+            "last_candidate_fingerprint=${RLCR_CANDIDATE_FINGERPRINT:-}" \
+            "last_reducer_action=${RLCR_REDUCER_ACTION:-terminal_exhausted}"; then
+            rm -f "$manifest" "$decision_file"
+            unset RLCR_ACTION_SIDECAR_MANIFEST
+            echo "State file renamed to: $LOOP_DIR/methodology-analysis-state.md" >&2
+            rlcr_action_emit "$scope_dir" "$LOOP_DIR" "$RLCR_ACTION_ID" || true
+            return 0
+        fi
+        unset RLCR_ACTION_SIDECAR_MANIFEST
+        rm -f "$manifest" "$decision_file" "$exit_prepare" "$done_prepare"
+        return 0
+    fi
+
+    # Non-Codex exits still use one fenced phase transaction.  The sidecars
+    # are visible before the source->target commit rename, and decision output
+    # occurs while cancel is excluded by the same short lease.
+    if ! rlcr_lock_acquire "$scope_dir"; then
+        rm -f "$manifest" "$decision_file" "$exit_prepare" "$done_prepare"
+        return 1
+    fi
+    if [[ -f "$LOOP_DIR/.cancel-requested" || ! -f "$STATE_FILE" ]]; then
+        rlcr_lock_release
+        rm -f "$manifest" "$decision_file" "$exit_prepare" "$done_prepare"
+        return 0
+    fi
+    local reviewer_fence_status=0
+    rlcr_epoch_writer_fence_locked "$LOOP_DIR" || reviewer_fence_status=$?
+    if [[ "$reviewer_fence_status" -ne 0 ]]; then
+        rlcr_lock_release
+        rm -f "$manifest" "$decision_file" "$exit_prepare" "$done_prepare"
+        return 4
+    fi
+    if ! rlcr_lock_heartbeat; then
+        rlcr_lock_release
+        rm -f "$manifest" "$decision_file" "$exit_prepare" "$done_prepare"
+        return 0
+    fi
+    mv "$exit_prepare" "$LOOP_DIR/.methodology-exit-reason"
+    mv "$done_prepare" "$LOOP_DIR/methodology-analysis-done.md"
+    if [[ "${RLCR_TEST_KILL_METHODOLOGY_AFTER_SIDECARS:-}" == "1" ]]; then
+        kill -9 "$$"
+    fi
+    local epoch
+    epoch=$(rlcr_epoch_read "$LOOP_DIR")
+    rlcr_epoch_write_locked "$LOOP_DIR" "$((epoch + 1))"
+    mv "$STATE_FILE" "$LOOP_DIR/methodology-analysis-state.md"
+    echo "State file renamed to: $LOOP_DIR/methodology-analysis-state.md" >&2
+    cat "$decision_file"
+    rlcr_lock_release
+    rm -f "$manifest" "$decision_file"
 
     return 0
 }
@@ -143,13 +222,17 @@ complete_methodology_analysis() {
     fi
 
     # Read exit reason (fail closed: missing marker blocks completion)
-    if [[ ! -f "$LOOP_DIR/.methodology-exit-reason" ]]; then
+    local exit_reason_file="$LOOP_DIR/.methodology-exit-reason"
+    if [[ ! -f "$exit_reason_file" && -f "$LOOP_DIR/.methodology-exit-reason.committing" ]]; then
+        exit_reason_file="$LOOP_DIR/.methodology-exit-reason.committing"
+    fi
+    if [[ ! -f "$exit_reason_file" ]]; then
         echo "Error: .methodology-exit-reason marker missing, cannot determine terminal state" >&2
         return 1
     fi
 
     local exit_reason
-    exit_reason=$(cat "$LOOP_DIR/.methodology-exit-reason" 2>/dev/null || echo "")
+    exit_reason=$(cat "$exit_reason_file" 2>/dev/null || echo "")
     exit_reason=$(echo "$exit_reason" | tr -d '[:space:]')
 
     # Validate exit reason (fail closed on invalid values)

@@ -872,6 +872,26 @@ echo "Base commit SHA captured: $BASE_COMMIT" >&2
 # ========================================
 
 LOOP_BASE_DIR="$PROJECT_ROOT/.humanize/rlcr"
+mkdir -p "$LOOP_BASE_DIR"
+
+# The early check above provides a fast error, but only this locked recheck is
+# authoritative.  It closes concurrent setup/setup and setup/cancel races.
+rlcr_lock_acquire "$LOOP_BASE_DIR" || exit 1
+SETUP_LOCK_HELD="true"
+release_setup_lock() {
+    if [[ "${SETUP_LOCK_HELD:-false}" == "true" ]]; then
+        rlcr_lock_release
+        SETUP_LOCK_HELD="false"
+    fi
+}
+trap release_setup_lock EXIT
+
+RLCR_LOOP_DIR=$(find_newest_active_loop_for_cancel "$LOOP_BASE_DIR" 2>/dev/null || echo "")
+if [[ -n "$RLCR_LOOP_DIR" ]]; then
+    echo "Error: An RLCR loop became active while setup was validating" >&2
+    echo "  Active loop: $RLCR_LOOP_DIR" >&2
+    exit 1
+fi
 
 # Create timestamp for this loop session
 TIMESTAMP=$(date +%Y-%m-%d_%H-%M-%S)
@@ -930,7 +950,8 @@ INITIAL_REVIEW_STARTED="$SKIP_IMPL"
 BITLESSON_STATE_VALUE="true"
 [[ "$SKIP_IMPL" == "true" ]] && BITLESSON_STATE_VALUE="false"
 
-cat > "$LOOP_DIR/state.md" << EOF
+SETUP_STATE_TEMP="$LOOP_DIR/.state.md.setup.$$"
+cat > "$SETUP_STATE_TEMP" << EOF
 ---
 current_round: 0
 max_iterations: $MAX_ITERATIONS
@@ -956,7 +977,20 @@ bitlesson_allow_empty_none: $BITLESSON_ALLOW_EMPTY_NONE
 mainline_stall_count: 0
 last_mainline_verdict: unknown
 drift_status: normal
+closeout_steps: 0
+max_closeout_steps: ${RLCR_MAX_CLOSEOUT_STEPS:-2}
+last_convergence_digest:
+last_candidate_fingerprint:
+last_reducer_action:
 started_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+control_epoch: 1
+pending_action_id:
+pending_successor_generation:
+pending_successor_phase:
+ack_action_id:
+ack_successor_generation:
+ack_successor_phase:
+last_applied_action_id:
 ---
 EOF
 
@@ -971,15 +1005,27 @@ printf '%s\n' "$BENCHMARK_TIMEOUT" > "$LOOP_DIR/benchmark-timeout"
 # The PostToolUse hook will only consume this signal when the Bash command
 # that triggered it matches the setup script marker, preventing other sessions
 # from accidentally claiming the signal.
+if ! rlcr_lock_heartbeat; then
+    rm -f "$SETUP_STATE_TEMP"
+    echo "Error: RLCR setup lease was fenced before state commit" >&2
+    exit 1
+fi
 mkdir -p "$PROJECT_ROOT/.humanize"
 # Write full resolved script path as command signature for strict verification
 SCRIPT_SELF_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]:-$0}")"
-printf '%s\n%s\n' "$LOOP_DIR/state.md" "$SCRIPT_SELF_PATH" > "$PROJECT_ROOT/.humanize/.pending-session-id"
+PENDING_TEMP="$PROJECT_ROOT/.humanize/.pending-session-id.tmp.$$"
+printf '%s\n%s\n' "$LOOP_DIR/state.md" "$SCRIPT_SELF_PATH" > "$PENDING_TEMP"
+mv "$PENDING_TEMP" "$PROJECT_ROOT/.humanize/.pending-session-id"
 
 # Create review phase marker file for skip-impl mode
 if [[ "$SKIP_IMPL" == "true" ]]; then
     echo "build_finish_round=0" > "$LOOP_DIR/.review-phase-started"
 fi
+
+# All sidecars exist before the single committing state rename.
+rlcr_epoch_write_locked "$LOOP_DIR" 1
+mv "$SETUP_STATE_TEMP" "$LOOP_DIR/state.md"
+release_setup_lock
 
 # ========================================
 # Create Goal Tracker File

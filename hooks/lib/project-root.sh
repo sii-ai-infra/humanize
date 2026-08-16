@@ -51,17 +51,30 @@ _HUMANIZE_PROJECT_ROOT_SOURCED=1
 resolve_project_root() {
     local env_root="${CLAUDE_PROJECT_DIR:-}"
     local git_root=""
+    local git_commondir_marker=""
+    local is_linked_worktree="false"
     local root=""
 
     git_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
     if [[ -n "$git_root" ]]; then
         git_root="$(canonicalize_path "$git_root")"
+        # Both linked worktrees and submodules use a .git *file*.  Only a
+        # linked worktree's private gitdir has the `commondir` marker, so use
+        # that marker instead of the shape of <worktree>/.git.  Treating a
+        # submodule as a linked worktree would incorrectly override the
+        # authoritative Claude session root when hooks run from a plugin
+        # checkout.
+        git_commondir_marker="$(git rev-parse --git-path commondir 2>/dev/null || true)"
+        if [[ -n "$git_commondir_marker" && -f "$git_commondir_marker" ]]; then
+            is_linked_worktree="true"
+        fi
     fi
     if [[ -n "$env_root" ]]; then
         env_root="$(canonicalize_path "$env_root")"
     fi
 
-    if [[ -n "$git_root" && -n "$env_root" && "$git_root" != "$env_root" && -f "$git_root/.git" ]]; then
+    if [[ -n "$git_root" && -n "$env_root" && "$git_root" != "$env_root" \
+       && "$is_linked_worktree" == "true" ]]; then
         root="$git_root"
     elif [[ -n "$env_root" ]]; then
         root="$env_root"

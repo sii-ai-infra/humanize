@@ -47,6 +47,8 @@ mkdir -p "$RLCR_DIR/$SESSION_A" "$RLCR_DIR/$SESSION_B" "$RLCR_DIR/$SESSION_FINAL
 : > "$RLCR_DIR/$SESSION_A/state.md"
 : > "$RLCR_DIR/$SESSION_B/state.md"
 : > "$RLCR_DIR/$SESSION_FINALIZE/finalize-state.md"
+printf '%s\n%s\n' "$RLCR_DIR/$SESSION_A/state.md" setup-signature \
+    > "$PROJECT_ROOT/.humanize/.pending-session-id"
 
 # ─── Test 1: missing --session-id ───
 if "$HELPER" --project "$PROJECT_ROOT" >/dev/null 2>&1; then
@@ -93,6 +95,15 @@ if [[ -f "$RLCR_DIR/$SESSION_A/.cancel-requested" ]]; then
     _pass "session A: .cancel-requested signal file present"
 else
     _fail "session A: .cancel-requested missing"
+fi
+
+# The Viz route uses this session-scoped CLI.  It must execute the same
+# canonical transaction as global cancel, including setup-handshake cleanup.
+if [[ ! -e "$PROJECT_ROOT/.humanize/.pending-session-id" \
+   && ! -e "$PROJECT_ROOT/.humanize/.pending-session-id.claimed" ]]; then
+    _pass "session cancel clears the matching pending-session handshake"
+else
+    _fail "session cancel left a stale pending-session handshake"
 fi
 
 # ─── Test 6: session B untouched ───

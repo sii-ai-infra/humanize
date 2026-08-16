@@ -63,8 +63,35 @@ HOOK_SESSION_ID=$(extract_session_id "$HOOK_INPUT")
 
 LOOP_DIR=$(find_active_loop "$LOOP_BASE_DIR" "$HOOK_SESSION_ID" true)
 
-# If no active loop (or session_id mismatch), allow exit
+# A terminal phase action may have committed its rename but been killed before
+# stdout.  It is no longer an "active" loop, so consult the minimal outbox
+# before allowing exit.
 if [[ -z "$LOOP_DIR" ]]; then
+    LOOP_DIR=$(rlcr_find_pending_action_loop "$LOOP_BASE_DIR" "$HOOK_SESSION_ID" 2>/dev/null || true)
+fi
+[[ -n "$LOOP_DIR" ]] || exit 0
+
+# Snapshot successor identity before any wait/replay path.  This tuple, not a
+# timestamp, distinguishes an already-in-flight duplicate publisher from the
+# hook invocation that actually observes the committed successor state.
+rlcr_observe_successor "$LOOP_DIR"
+
+EARLY_ACTION_STATUS=0
+rlcr_action_recover_pending "$LOOP_BASE_DIR" "$LOOP_DIR" \
+    "$RLCR_OBSERVED_GENERATION" "$RLCR_OBSERVED_PHASE" || EARLY_ACTION_STATUS=$?
+case "$EARLY_ACTION_STATUS" in
+    2)
+        rlcr_action_emit "$LOOP_BASE_DIR" "$LOOP_DIR" "$RLCR_ACTION_ID" || true
+        exit 0
+        ;;
+    3)
+        exit 0
+        ;;
+esac
+
+# The pending action may have belonged to a terminal phase and just been
+# successor-acknowledged.  Re-resolve active state before normal hook guards.
+if [[ -z "$(rlcr_active_state_file "$LOOP_DIR")" ]]; then
     exit 0
 fi
 
@@ -130,6 +157,10 @@ BASE_COMMIT="${STATE_BASE_COMMIT:-}"
 PLAN_FILE="$STATE_PLAN_FILE"
 CURRENT_ROUND="$STATE_CURRENT_ROUND"
 MAX_ITERATIONS="$STATE_MAX_ITERATIONS"
+CLOSEOUT_STEPS="${STATE_CLOSEOUT_STEPS:-0}"
+MAX_CLOSEOUT_STEPS="${STATE_MAX_CLOSEOUT_STEPS:-$RLCR_DEFAULT_MAX_CLOSEOUT_STEPS}"
+LAST_CONVERGENCE_DIGEST="${STATE_LAST_CONVERGENCE_DIGEST:-}"
+LAST_CANDIDATE_FINGERPRINT="${STATE_LAST_CANDIDATE_FINGERPRINT:-}"
 PUSH_EVERY_ROUND="$STATE_PUSH_EVERY_ROUND"
 FULL_REVIEW_ROUND="${STATE_FULL_REVIEW_ROUND:-5}"
 REVIEW_STARTED="$STATE_REVIEW_STARTED"
@@ -662,11 +693,86 @@ Please commit all changes before allowing the loop to exit.
         fi
         # Analysis complete and tree clean. Now do the terminal rename so the
         # active state file stays in place until this cleanliness gate passes.
-        _meth_exit_reason=$(cat "$LOOP_DIR/.methodology-exit-reason" 2>/dev/null | tr -d '[:space:]' || echo "")
+        _meth_reason_file="$LOOP_DIR/.methodology-exit-reason"
+        [[ -f "$_meth_reason_file" ]] || _meth_reason_file="$LOOP_DIR/.methodology-exit-reason.committing"
+        _meth_exit_reason=$(cat "$_meth_reason_file" 2>/dev/null | tr -d '[:space:]' || echo "")
         if [[ -n "$_meth_exit_reason" ]]; then
-            mv "$LOOP_DIR/methodology-analysis-state.md" "$LOOP_DIR/${_meth_exit_reason}-state.md" 2>/dev/null || true
-            rm -f "$LOOP_DIR/.methodology-exit-reason"
-            echo "Methodology analysis complete. State preserved as: $LOOP_DIR/${_meth_exit_reason}-state.md" >&2
+            _meth_signal=none
+            [[ "$_meth_exit_reason" == complete ]] && _meth_signal=COMPLETE
+            [[ "$_meth_exit_reason" == stop ]] && _meth_signal=STOP
+            rlcr_control_evaluate "$PROJECT_ROOT" "$LOOP_DIR" methodology-analysis "$_meth_signal"
+            _meth_budget=remaining
+            [[ "$_meth_exit_reason" == maxiter ]] && _meth_budget=exhausted
+            _meth_cancel=false
+            [[ -f "$LOOP_DIR/.cancel-requested" ]] && _meth_cancel=true
+            reduce methodology-analysis "$_meth_signal" "$RLCR_CONVERGENCE_STATUS" \
+                "$_meth_budget" "$RLCR_CONVERGENCE_INFRA" "$_meth_cancel" >/dev/null
+            case "$RLCR_REDUCER_ACTION" in
+                terminal_success) _meth_target="$LOOP_DIR/complete-state.md" ;;
+                terminal_exhausted) _meth_target="$LOOP_DIR/stop-state.md" ;;
+                terminal_budget) _meth_target="$LOOP_DIR/maxiter-state.md" ;;
+                terminal_cancelled) _meth_target="$LOOP_DIR/cancel-state.md" ;;
+                terminal_blocked) _meth_target="$LOOP_DIR/blocked-state.md" ;;
+                *)
+                    RLCR_REDUCER_ACTION=terminal_blocked
+                    RLCR_REDUCER_NEXT_PHASE=terminal
+                    RLCR_CONVERGENCE_REASON=invalid_methodology_completion_transition
+                    _meth_target="$LOOP_DIR/blocked-state.md"
+                    ;;
+            esac
+            RLCR_REDUCER_NEXT_PHASE=terminal
+
+            _meth_begin_status=0
+            rlcr_action_begin "$LOOP_BASE_DIR" "$LOOP_DIR" methodology-analysis \
+                "$CURRENT_ROUND" || _meth_begin_status=$?
+            case "$_meth_begin_status" in
+                0) ;;
+                2) rlcr_action_emit "$LOOP_BASE_DIR" "$LOOP_DIR" "$RLCR_ACTION_ID" || true; exit 0 ;;
+                3) exit 0 ;;
+                *)
+                    echo "Error: methodology reducer action reservation was fenced" >&2
+                    exit 0
+                    ;;
+            esac
+            if ! rlcr_action_bind "$LOOP_BASE_DIR" "$LOOP_DIR" \
+                "$RLCR_CONVERGENCE_DIGEST" "$RLCR_REDUCER_ACTION" \
+                "$RLCR_REDUCER_VERSION"; then
+                echo "Error: methodology reducer action-id binding was fenced" >&2
+                exit 0
+            fi
+
+            _meth_decision="$LOOP_DIR/.methodology-terminal-decision.prepare.$$"
+            jq -n --arg action_id "$RLCR_ACTION_ID" \
+                --arg version "$RLCR_REDUCER_VERSION" \
+                --arg digest "$RLCR_CONVERGENCE_DIGEST" \
+                --arg kind "$RLCR_REDUCER_ACTION" \
+                '{action_id:$action_id,reducer_version:$version,
+                  convergence_digest:$digest,
+                  action:{next_phase:"terminal",payload:{kind:$kind}}}' \
+                > "$_meth_decision"
+            _meth_manifest=""
+            if [[ "$_meth_reason_file" != *'.committing' ]]; then
+                _meth_manifest="$LOOP_DIR/.methodology-terminal-sidecars.prepare.$$"
+                printf '%s\t%s\n' "$_meth_reason_file" \
+                    "$LOOP_DIR/.methodology-exit-reason.committing" > "$_meth_manifest"
+                RLCR_ACTION_SIDECAR_MANIFEST="$_meth_manifest"
+            fi
+            if rlcr_action_commit_phase "$LOOP_BASE_DIR" "$LOOP_DIR" \
+                "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$_meth_decision" \
+                "$LOOP_DIR/methodology-analysis-state.md" "$_meth_target" \
+                "${FIELD_LAST_CONVERGENCE_DIGEST}=$RLCR_CONVERGENCE_DIGEST" \
+                "${FIELD_LAST_CANDIDATE_FINGERPRINT}=$RLCR_CANDIDATE_FINGERPRINT" \
+                "${FIELD_LAST_REDUCER_ACTION}=$RLCR_REDUCER_ACTION"; then
+                unset RLCR_ACTION_SIDECAR_MANIFEST
+                rm -f "$_meth_manifest" "$_meth_decision" \
+                    "$LOOP_DIR/.methodology-exit-reason.committing"
+                echo "Methodology analysis complete via reducer: $RLCR_REDUCER_ACTION" >&2
+                rlcr_action_emit "$LOOP_BASE_DIR" "$LOOP_DIR" "$RLCR_ACTION_ID" || true
+            else
+                unset RLCR_ACTION_SIDECAR_MANIFEST
+                rm -f "$_meth_manifest" "$_meth_decision"
+                echo "Error: methodology reducer transition was fenced; retry on next Stop" >&2
+            fi
         fi
         exit 0
     else
@@ -966,42 +1072,10 @@ Please fill in the Goal Tracker ({{GOAL_TRACKER_FILE}}):
     fi
 fi
 
-# ========================================
-# Check Max Iterations (skip in Finalize Phase - already post-COMPLETE)
-# ========================================
-
 NEXT_ROUND=$((CURRENT_ROUND + 1))
 
-# Skip max iterations check in Finalize Phase or Review Phase
-# - Finalize Phase: already received COMPLETE from codex
-# - Review Phase: must continue until [P?] issues are cleared, regardless of iteration count
-if [[ "$IS_FINALIZE_PHASE" != "true" ]] && [[ "$REVIEW_STARTED" != "true" ]] && [[ $NEXT_ROUND -gt $MAX_ITERATIONS ]]; then
-    echo "RLCR loop did not complete, but reached max iterations ($MAX_ITERATIONS). Exiting." >&2
-    # Try to enter methodology analysis phase before final exit
-    if enter_methodology_analysis_phase "maxiter" "Reached max iterations ($MAX_ITERATIONS) without completion"; then
-        exit 0
-    fi
-    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_MAXITER"
-    exit 0
-fi
-
-# ========================================
-# Finalize Phase Completion (skip Codex review)
-# ========================================
-# If we're in Finalize Phase and all checks have passed, complete the loop
-# No Codex review is performed - this is the final step after Codex already confirmed COMPLETE
-
-if [[ "$IS_FINALIZE_PHASE" == "true" ]]; then
-    echo "Finalize Phase complete. All checks passed." >&2
-    # Try to enter methodology analysis phase before final exit
-    if enter_methodology_analysis_phase "complete" "All acceptance criteria met and code review passed"; then
-        exit 0
-    fi
-    # Methodology analysis skipped or already done - proceed with normal exit
-    mv "$STATE_FILE" "$LOOP_DIR/complete-state.md"
-    echo "State preserved as: $LOOP_DIR/complete-state.md" >&2
-    exit 0
-fi
+# Max-iteration and finalize outcomes are no longer decided here.  They join
+# COMPLETE and normal round advance at the convergence reducer below.
 
 # ========================================
 # Docs Path (static default)
@@ -1196,6 +1270,251 @@ fi
 # Initialize these before the REVIEW_STARTED guard so they are available in both
 # impl phase (codex exec) and review phase (codex review)
 
+# Reserve exactly one publisher before any Codex probing/invocation.  A
+# concurrent native Stop / rlcr-stop-gate process waits for this publisher and
+# physically replays its canonical outbox action instead of running Codex.
+ACTION_PHASE="implementation"
+[[ "$REVIEW_STARTED" == "true" ]] && ACTION_PHASE="review"
+[[ "$IS_FINALIZE_PHASE" == "true" ]] && ACTION_PHASE="finalize"
+[[ "$IS_METHODOLOGY_ANALYSIS_PHASE" == "true" ]] && ACTION_PHASE="methodology-analysis"
+ACTION_BEGIN_STATUS=0
+rlcr_action_begin "$LOOP_BASE_DIR" "$LOOP_DIR" "$ACTION_PHASE" "$CURRENT_ROUND" || ACTION_BEGIN_STATUS=$?
+case "$ACTION_BEGIN_STATUS" in
+    0) ;;
+    2)
+        rlcr_action_emit "$LOOP_BASE_DIR" "$LOOP_DIR" "$RLCR_ACTION_ID" || true
+        exit 0
+        ;;
+    3)
+        # Cancellation or another terminal transition fenced this publisher.
+        exit 0
+        ;;
+    4)
+        jq -n \
+            --arg reason "RLCR recovery is fenced because the previous reviewer process group cannot be mechanically proven terminated. Do not retry inside the Stop hook; terminate the recorded worker or move this loop to an external single-writer driver." \
+            --arg msg "Loop: Blocked - orphan reviewer termination is unproven" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+        ;;
+    *)
+        echo "Error: unable to reserve RLCR generation action" >&2
+        exit 1
+        ;;
+esac
+
+commit_action_decision() {
+    local reason="$1" message="$2"
+    shift 2
+    local action_kind="${RLCR_REDUCER_ACTION:-continue_closeout}"
+    local next_phase="${RLCR_REDUCER_NEXT_PHASE:-$ACTION_PHASE}"
+    local convergence_digest="${RLCR_CONVERGENCE_DIGEST:-}"
+    local -a state_assignments=("$@")
+    if [[ ! "$convergence_digest" =~ ^[0-9a-f]{64}$ ]]; then
+        convergence_digest=$(printf 'rlcr-no-convergence-v1\n' | rlcr_sha256_stream)
+    fi
+    if ! rlcr_action_bind "$LOOP_BASE_DIR" "$LOOP_DIR" "$convergence_digest" \
+        "$action_kind" "$RLCR_REDUCER_VERSION"; then
+        echo "Error: reducer action-id binding was fenced" >&2
+        exit 0
+    fi
+    if [[ -n "${RLCR_CONVERGENCE_STATUS:-}" ]]; then
+        state_assignments+=(
+            "${FIELD_LAST_CONVERGENCE_DIGEST}=$convergence_digest"
+            "${FIELD_LAST_CANDIDATE_FINGERPRINT}=${RLCR_CANDIDATE_FINGERPRINT:-}"
+            "${FIELD_LAST_REDUCER_ACTION}=$action_kind"
+        )
+        if [[ "$RLCR_CONVERGENCE_STATUS" == "pass" \
+           && "$next_phase" != "terminal" ]]; then
+            state_assignments+=("${FIELD_CLOSEOUT_STEPS}=$((CLOSEOUT_STEPS + 1))")
+        fi
+    fi
+    local decision_file="$LOOP_DIR/.decision.prepare.$$"
+    jq -n --arg action_id "$RLCR_ACTION_ID" --arg reason "$reason" --arg msg "$message" \
+        --arg version "$RLCR_REDUCER_VERSION" --arg digest "$convergence_digest" \
+        --arg next_phase "$next_phase" --arg kind "$action_kind" \
+        '{action_id:$action_id,reducer_version:$version,convergence_digest:$digest,
+          action:{next_phase:$next_phase,payload:{kind:$kind}},
+          decision:"block",reason:$reason,systemMessage:$msg}' \
+        > "$decision_file"
+    if rlcr_action_commit_same_state "$LOOP_BASE_DIR" "$LOOP_DIR" \
+        "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$decision_file" "$STATE_FILE" \
+        "${state_assignments[@]}"; then
+        rm -f "$decision_file"
+        [[ -z "${RLCR_ACTION_SIDECAR_MANIFEST:-}" ]] || rm -f "$RLCR_ACTION_SIDECAR_MANIFEST"
+        unset RLCR_ACTION_SIDECAR_MANIFEST
+        rlcr_action_emit "$LOOP_BASE_DIR" "$LOOP_DIR" "$RLCR_ACTION_ID" || true
+    else
+        rm -f "$decision_file"
+        [[ -z "${RLCR_ACTION_SIDECAR_MANIFEST:-}" ]] || rm -f "$RLCR_ACTION_SIDECAR_MANIFEST"
+        unset RLCR_ACTION_SIDECAR_MANIFEST
+    fi
+    exit 0
+}
+
+commit_action_phase_decision() {
+    local reason="$1" message="$2" target_state="$3"
+    shift 3
+    local action_kind="${RLCR_REDUCER_ACTION:-continue_closeout}"
+    local next_phase="${RLCR_REDUCER_NEXT_PHASE:-$(rlcr_state_phase "$target_state" "$STATE_FILE" 2>/dev/null || echo terminal)}"
+    local convergence_digest="${RLCR_CONVERGENCE_DIGEST:-}"
+    local -a state_assignments=("$@")
+    if [[ ! "$convergence_digest" =~ ^[0-9a-f]{64}$ ]]; then
+        convergence_digest=$(printf 'rlcr-no-convergence-v1\n' | rlcr_sha256_stream)
+    fi
+    if ! rlcr_action_bind "$LOOP_BASE_DIR" "$LOOP_DIR" "$convergence_digest" \
+        "$action_kind" "$RLCR_REDUCER_VERSION"; then
+        echo "Error: reducer phase action-id binding was fenced" >&2
+        exit 0
+    fi
+    if [[ -n "${RLCR_CONVERGENCE_STATUS:-}" ]]; then
+        state_assignments+=(
+            "${FIELD_LAST_CONVERGENCE_DIGEST}=$convergence_digest"
+            "${FIELD_LAST_CANDIDATE_FINGERPRINT}=${RLCR_CANDIDATE_FINGERPRINT:-}"
+            "${FIELD_LAST_REDUCER_ACTION}=$action_kind"
+        )
+        if [[ "$RLCR_CONVERGENCE_STATUS" == "pass" \
+           && "$next_phase" != "terminal" ]]; then
+            state_assignments+=("${FIELD_CLOSEOUT_STEPS}=$((CLOSEOUT_STEPS + 1))")
+        fi
+    fi
+    local decision_file="$LOOP_DIR/.decision.prepare.$$"
+    jq -n --arg action_id "$RLCR_ACTION_ID" --arg reason "$reason" --arg msg "$message" \
+        --arg version "$RLCR_REDUCER_VERSION" --arg digest "$convergence_digest" \
+        --arg next_phase "$next_phase" --arg kind "$action_kind" \
+        --argjson terminal "$([[ "$next_phase" == "terminal" ]] && echo true || echo false)" \
+        '{action_id:$action_id,reducer_version:$version,convergence_digest:$digest,
+          action:{next_phase:$next_phase,payload:{kind:$kind}}}
+          + (if $terminal then {} else {decision:"block",reason:$reason,systemMessage:$msg} end)' \
+        > "$decision_file"
+    if rlcr_action_commit_phase "$LOOP_BASE_DIR" "$LOOP_DIR" \
+        "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$decision_file" "$STATE_FILE" "$target_state" \
+        "${state_assignments[@]}"; then
+        rm -f "$decision_file"
+        [[ -z "${RLCR_ACTION_SIDECAR_MANIFEST:-}" ]] || rm -f "$RLCR_ACTION_SIDECAR_MANIFEST"
+        unset RLCR_ACTION_SIDECAR_MANIFEST
+        rlcr_action_emit "$LOOP_BASE_DIR" "$LOOP_DIR" "$RLCR_ACTION_ID" || true
+    else
+        rm -f "$decision_file"
+        [[ -z "${RLCR_ACTION_SIDECAR_MANIFEST:-}" ]] || rm -f "$RLCR_ACTION_SIDECAR_MANIFEST"
+        unset RLCR_ACTION_SIDECAR_MANIFEST
+    fi
+    exit 0
+}
+
+prepare_reducer_decision() {
+    local phase="$1" reviewer_signal="$2"
+    rlcr_control_decide "$PROJECT_ROOT" "$LOOP_DIR" "$phase" "$reviewer_signal" \
+        "$CURRENT_ROUND" "$MAX_ITERATIONS" "$CLOSEOUT_STEPS" \
+        "$MAX_CLOSEOUT_STEPS" "$LAST_CONVERGENCE_DIGEST" \
+        "$LAST_CANDIDATE_FINGERPRINT"
+    echo "RLCR reducer: phase=$phase reviewer=$reviewer_signal convergence=$RLCR_CONVERGENCE_STATUS budget=$RLCR_REDUCER_BUDGET action=$RLCR_REDUCER_ACTION next=$RLCR_REDUCER_NEXT_PHASE" >&2
+}
+
+commit_reducer_terminal() {
+    local action="$RLCR_REDUCER_ACTION"
+    local reason="# RLCR Terminal Decision
+
+The convergence control plane selected **$action**.
+
+- Phase: $ACTION_PHASE
+- Convergence: $RLCR_CONVERGENCE_STATUS
+- Evidence: $RLCR_CONVERGENCE_REASON
+- Budget: $RLCR_REDUCER_BUDGET
+- Reducer: $RLCR_REDUCER_VERSION"
+    local target message
+    local -a terminal_assignments=()
+    if [[ "$ACTION_PHASE" == "implementation" \
+       && "$RLCR_REDUCER_REASON" == "reviewer_circuit_breaker" \
+       && -n "${NEXT_MAINLINE_STALL_COUNT:-}" ]]; then
+        terminal_assignments+=(
+            "${FIELD_MAINLINE_STALL_COUNT}=${NEXT_MAINLINE_STALL_COUNT}"
+            "${FIELD_LAST_MAINLINE_VERDICT}=${NEXT_LAST_MAINLINE_VERDICT}"
+            "${FIELD_DRIFT_STATUS}=${NEXT_DRIFT_STATUS}"
+        )
+    fi
+    case "$action" in
+        terminal_success)
+            # Finalize selected the terminal outcome, but the historical
+            # Humanize methodology epilogue must still run before the terminal
+            # state is published.  The completion Stop then feeds
+            # methodology-analysis + COMPLETE back through the reducer.
+            if [[ "$ACTION_PHASE" == "finalize" ]]; then
+                if enter_methodology_analysis_phase "complete" \
+                    "All acceptance criteria, convergence checks, and code review passed"; then
+                    exit 0
+                fi
+            fi
+            target="$LOOP_DIR/complete-state.md"
+            message="Loop: Complete - convergence and closeout verified"
+            ;;
+        terminal_exhausted)
+            if [[ "$RLCR_REDUCER_NEXT_PHASE" == "methodology-analysis" ]]; then
+                if enter_methodology_analysis_phase "stop" \
+                    "Convergence exhausted after deterministic reducer evaluation"; then
+                    exit 0
+                fi
+                RLCR_REDUCER_NEXT_PHASE=terminal
+            fi
+            target="$LOOP_DIR/stop-state.md"
+            message="Loop: Exhausted - no productive direction remains"
+            ;;
+        terminal_budget)
+            if [[ "$RLCR_REDUCER_NEXT_PHASE" == "methodology-analysis" ]]; then
+                if enter_methodology_analysis_phase "maxiter" \
+                    "The bounded reducer budget, including closeout allowance, was exhausted"; then
+                    exit 0
+                fi
+                RLCR_REDUCER_NEXT_PHASE=terminal
+            fi
+            target="$LOOP_DIR/maxiter-state.md"
+            message="Loop: Budget exhausted"
+            ;;
+        terminal_blocked)
+            target="$LOOP_DIR/blocked-state.md"
+            message="Loop: Blocked - convergence evidence or infrastructure invalid"
+            ;;
+        terminal_cancelled)
+            target="$LOOP_DIR/cancel-state.md"
+            message="Loop: Cancelled"
+            ;;
+        *)
+            RLCR_REDUCER_ACTION=terminal_blocked
+            RLCR_REDUCER_NEXT_PHASE=terminal
+            target="$LOOP_DIR/blocked-state.md"
+            message="Loop: Blocked - invalid terminal reducer action"
+            ;;
+    esac
+    commit_action_phase_decision "$reason" "$message" "$target" \
+        "${terminal_assignments[@]}"
+}
+
+# Finalize is a real reducer turn.  A changed candidate/commit is accepted only
+# after the evaluator produces a different, valid convergence digest.
+if [[ "$IS_FINALIZE_PHASE" == "true" ]]; then
+    prepare_reducer_decision finalize COMPLETE
+    case "$RLCR_REDUCER_ACTION" in
+        terminal_*) commit_reducer_terminal ;;
+        continue_optimize|continue_pivot)
+            FINALIZE_RETRY="# Finalize Invalidated Performance Evidence
+
+Finalize changed the candidate or the current evidence is no longer passing.
+Return to implementation, regenerate persisted benchmark evidence, and satisfy
+the reducer before entering review/finalize again."
+            commit_action_phase_decision "$FINALIZE_RETRY" \
+                "Loop: Finalize invalidated convergence - return to implementation" \
+                "$LOOP_DIR/state.md" \
+                "${FIELD_REVIEW_STARTED}=false" \
+                "${FIELD_CURRENT_ROUND}=${NEXT_ROUND}"
+            ;;
+        *)
+            RLCR_REDUCER_ACTION=terminal_blocked
+            RLCR_REDUCER_NEXT_PHASE=terminal
+            RLCR_CONVERGENCE_REASON=invalid_finalize_transition
+            commit_reducer_terminal
+            ;;
+    esac
+fi
+
 # First, check if Codex CLI exists
 if ! command -v codex >/dev/null 2>&1; then
     REASON="# Codex CLI Not Found
@@ -1209,13 +1528,7 @@ RLCR loop requires it to perform reviews.
 
 Or use \`/cancel-rlcr-loop\` to end the loop."
 
-    cat <<EOF
-{
-    "decision": "block",
-    "reason": $(echo "$REASON" | jq -Rs .)
-}
-EOF
-    exit 0
+    commit_action_decision "$REASON" "Loop: Blocked - Codex CLI not found"
 fi
 
 # Debug log files go to XDG_CACHE_HOME/humanize/<project-path>/<timestamp>/ to avoid polluting project dir
@@ -1282,6 +1595,91 @@ CODEX_REVIEW_ARGS=("-c" "model=${CODEX_REVIEW_MODEL}" "-c" "review_model=${CODEX
 if [[ -n "$CODEX_REVIEW_EFFORT" ]]; then
     CODEX_REVIEW_ARGS+=("-c" "model_reasoning_effort=${CODEX_REVIEW_EFFORT}")
 fi
+
+# Run a reviewer only after its random worker identity and Linux session/PGID
+# have been persisted in .action-inflight.  Recovery and cancellation use that
+# record to terminate the whole group and prove it empty before another Codex
+# process may start.  Unsupported hosts fail closed with status 125.
+run_fenced_reviewer() {
+    local stdin_file="$1" stdout_file="$2" stderr_file="$3"
+    shift 3
+    local reviewer_worker="$PLUGIN_ROOT/scripts/rlcr-reviewer-worker.sh" setsid_cmd=""
+    setsid_cmd=$(command -v setsid 2>/dev/null || true)
+    if [[ -z "$setsid_cmd" || ! -x "$reviewer_worker" || ! -r "/proc/$$/stat" ]]; then
+        echo "Error: safe reviewer process-group isolation requires setsid and readable Linux /proc" >&2
+        return 125
+    fi
+
+    local worker_id gate_file gate_temp result_file worker_pid
+    local worker_pgid="" worker_session="" worker_start_ticks=""
+    local worker_wait_status=0 reviewer_status=125 identity_tick=0
+    worker_id="reviewer-$(rlcr_new_token)"
+    gate_file="$LOOP_DIR/.reviewer-start-$worker_id"
+    gate_temp="${gate_file}.tmp.$$"
+    result_file="$LOOP_DIR/.reviewer-result-$worker_id"
+
+    rlcr_reviewer_prepare "$LOOP_BASE_DIR" "$LOOP_DIR" \
+        "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$worker_id" || return 125
+
+    env RLCR_REVIEWER_WORKER_ID="$worker_id" \
+        "$setsid_cmd" \
+        "$reviewer_worker" \
+        --gate "$gate_file" \
+        --worker-id "$worker_id" \
+        --result "$result_file" \
+        --stdin "$stdin_file" \
+        --cwd "$PROJECT_ROOT" \
+        --timeout "$CODEX_TIMEOUT" \
+        --stdout "$stdout_file" \
+        --stderr "$stderr_file" \
+        -- "$@" &
+    worker_pid=$!
+
+    while [[ "$identity_tick" -lt 200 ]]; do
+        if read -r worker_pgid worker_session worker_start_ticks \
+            < <(rlcr_proc_identity "$worker_pid" 2>/dev/null) \
+           && [[ "$worker_pid" == "$worker_pgid" && "$worker_pgid" == "$worker_session" ]] \
+           && rlcr_process_has_worker_id "$worker_pid" "$worker_id"; then
+            break
+        fi
+        worker_pgid=""; worker_session=""; worker_start_ticks=""
+        identity_tick=$((identity_tick + 1))
+        sleep 0.01
+    done
+
+    if [[ -z "$worker_pgid" ]] \
+       || ! rlcr_reviewer_register "$LOOP_BASE_DIR" "$LOOP_DIR" \
+            "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$worker_id" \
+            "$worker_pid" "$worker_pgid" "$worker_start_ticks"; then
+        # Keep `reviewer_state=finished` a durable empty-group proof.  Even an
+        # unregistered worker must exit behind its unpublished gate before the
+        # proof is recorded; otherwise a concurrent epoch writer could consume
+        # `finished` while that gated worker process still exists.
+        wait "$worker_pid" 2>/dev/null || true
+        rlcr_reviewer_finish "$LOOP_BASE_DIR" "$LOOP_DIR" \
+            "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$worker_id" || true
+        rm -f "$gate_file" "$gate_temp" "$result_file"
+        return 125
+    fi
+
+    printf '%s\n' "$worker_id" > "$gate_temp"
+    mv "$gate_temp" "$gate_file"
+    wait "$worker_pid" 2>/dev/null || worker_wait_status=$?
+    if [[ -s "$result_file" ]]; then
+        IFS= read -r reviewer_status < "$result_file" || reviewer_status=125
+    else
+        reviewer_status="$worker_wait_status"
+    fi
+    [[ "$reviewer_status" =~ ^[0-9]+$ && "$reviewer_status" -le 255 ]] || reviewer_status=125
+
+    if ! rlcr_reviewer_finish "$LOOP_BASE_DIR" "$LOOP_DIR" \
+        "$RLCR_ACTION_ID" "$RLCR_ACTION_EPOCH" "$worker_id"; then
+        rm -f "$gate_file" "$gate_temp" "$result_file"
+        return 125
+    fi
+    rm -f "$gate_file" "$gate_temp" "$result_file"
+    return "$reviewer_status"
+}
 
 # ========================================
 # Helper Functions for Code Review Phase
@@ -1350,8 +1748,10 @@ Provider: codex
     echo "Running codex review with timeout ${CODEX_TIMEOUT}s in $PROJECT_ROOT (base: $review_base)..." >&2
 
     CODEX_REVIEW_EXIT_CODE=0
-    (cd "$PROJECT_ROOT" && run_with_timeout "$CODEX_TIMEOUT" codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_PROFILE_ARGS[@]}" review --base "$review_base" "${CODEX_REVIEW_ARGS[@]}") \
-        > "$CODEX_REVIEW_LOG_FILE" 2>&1 || CODEX_REVIEW_EXIT_CODE=$?
+    run_fenced_reviewer /dev/null "$CODEX_REVIEW_LOG_FILE" "$CODEX_REVIEW_LOG_FILE" \
+        codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} \
+        "${CODEX_PROFILE_ARGS[@]}" review \
+        --base "$review_base" "${CODEX_REVIEW_ARGS[@]}" || CODEX_REVIEW_EXIT_CODE=$?
 
     echo "Code review exit code: $CODEX_REVIEW_EXIT_CODE" >&2
     echo "Code review log saved to: $CODEX_REVIEW_LOG_FILE" >&2
@@ -1393,14 +1793,35 @@ run_and_handle_code_review() {
     if [[ "$detect_exit" -eq 2 ]]; then
         # Stdout missing/empty is a hard error - block and require retry
         block_review_failure "$round" "Codex review produced no stdout output" "N/A"
-    elif [[ "$detect_exit" -eq 0 ]] && [[ -n "$merged_content" ]]; then
-        # Issues found - continue review loop
-        continue_review_loop_with_issues "$round" "$merged_content"
-    else
-        # No issues found (exit code 1) - proceed to finalize
-        echo "Code review passed with no issues. Proceeding to finalize phase." >&2
-        enter_finalize_phase "" "$success_msg"
     fi
+
+    local reviewer_signal=none
+    if [[ "$detect_exit" -eq 0 && -n "$merged_content" ]]; then
+        reviewer_signal=review_issue
+    fi
+    prepare_reducer_decision review "$reviewer_signal"
+    case "$RLCR_REDUCER_ACTION:$RLCR_REDUCER_NEXT_PHASE" in
+        terminal_*:*)
+            commit_reducer_terminal
+            ;;
+        continue_closeout:finalize)
+            echo "Code review and convergence passed. Proceeding to finalize phase." >&2
+            enter_finalize_phase "" "$success_msg"
+            ;;
+        continue_closeout:review)
+            continue_review_loop_with_issues "$round" "$merged_content"
+            ;;
+        continue_optimize:implementation|continue_pivot:implementation)
+            [[ -n "$merged_content" ]] || merged_content="Convergence is no longer passing. Regenerate current performance evidence before requesting review again."
+            continue_review_loop_with_issues "$round" "$merged_content" true
+            ;;
+        *)
+            RLCR_REDUCER_ACTION=terminal_blocked
+            RLCR_REDUCER_NEXT_PHASE=terminal
+            RLCR_CONVERGENCE_REASON=invalid_review_transition
+            commit_reducer_terminal
+            ;;
+    esac
 }
 
 # Enter finalize phase with appropriate prompt
@@ -1408,9 +1829,6 @@ run_and_handle_code_review() {
 enter_finalize_phase() {
     local skip_reason="$1"
     local system_msg="$2"
-
-    mv "$STATE_FILE" "$LOOP_DIR/finalize-state.md"
-    echo "State file renamed to: $LOOP_DIR/finalize-state.md" >&2
 
     local finalize_summary_file="$LOOP_DIR/finalize-summary.md"
     local finalize_prompt
@@ -1478,15 +1896,8 @@ Focus on the code changes made during this RLCR session. Focus more on changes b
             "START_BRANCH=$START_BRANCH")
     fi
 
-    jq -n \
-        --arg reason "$finalize_prompt" \
-        --arg msg "$system_msg" \
-        '{
-            "decision": "block",
-            "reason": $reason,
-            "systemMessage": $msg
-        }'
-    exit 0
+    commit_action_phase_decision "$finalize_prompt" "$system_msg" \
+        "$LOOP_DIR/finalize-state.md"
 }
 
 # Append task tag routing reminder to follow-up prompts.
@@ -1503,44 +1914,6 @@ Follow the plan's per-task routing tags strictly:
 - `analyze` task -> execute via `/humanize:ask-codex`, then integrate the result
 - Keep Goal Tracker Active Tasks columns `Tag` and `Owner` aligned with execution
 ROUTING_EOF
-}
-
-# Stop the loop when mainline progress has stalled for too many consecutive rounds.
-# Arguments: $1=stall_count, $2=last_verdict
-stop_for_mainline_drift() {
-    local stall_count="$1"
-    local last_verdict="$2"
-
-    upsert_state_fields "$STATE_FILE" \
-        "${FIELD_MAINLINE_STALL_COUNT}=${stall_count}" \
-        "${FIELD_LAST_MAINLINE_VERDICT}=${last_verdict}" \
-        "${FIELD_DRIFT_STATUS}=${DRIFT_STATUS_REPLAN_REQUIRED}"
-
-    local fallback="# Mainline Drift Circuit Breaker
-
-The RLCR loop has been stopped because the mainline failed to advance for {{STALL_COUNT}} consecutive implementation rounds.
-
-- Last mainline verdict: {{LAST_VERDICT}}
-- Drift status: replan_required
-
-This loop should not continue automatically. Revisit the original plan, recover the round contract, and restart with a narrower mainline objective."
-    local reason
-    reason=$(load_and_render_safe "$TEMPLATE_DIR" "block/mainline-drift-stop.md" "$fallback" \
-        "STALL_COUNT=$stall_count" \
-        "LAST_VERDICT=$last_verdict" \
-        "PLAN_FILE=$PLAN_FILE")
-
-    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_STOP"
-
-    jq -n \
-        --arg reason "$reason" \
-        --arg msg "Loop: Stopped - mainline drift circuit breaker triggered" \
-        '{
-            "decision": "block",
-            "reason": $reason,
-            "systemMessage": $msg
-        }'
-    exit 0
 }
 
 # Block exit when implementation review output omits the required mainline verdict.
@@ -1567,15 +1940,8 @@ Files:
         "REVIEW_RESULT_FILE=$review_result_file" \
         "REVIEW_PROMPT_FILE=$review_prompt_file")
 
-    jq -n \
-        --arg reason "$reason" \
-        --arg msg "Loop: Blocked - implementation review missing Mainline Progress Verdict" \
-        '{
-            "decision": "block",
-            "reason": $reason,
-            "systemMessage": $msg
-        }'
-    exit 0
+    commit_action_decision "$reason" \
+        "Loop: Blocked - implementation review missing Mainline Progress Verdict"
 }
 
 # Continue review loop when issues are found
@@ -1583,13 +1949,9 @@ Files:
 continue_review_loop_with_issues() {
     local round="$1"
     local review_content="$2"
+    local return_to_implementation="${3:-false}"
 
     echo "Code review found issues. Continuing review loop..." >&2
-
-    # Update round number in state file
-    local temp_file="${STATE_FILE}.tmp.$$"
-    sed "s/^current_round: .*/current_round: $round/" "$STATE_FILE" > "$temp_file"
-    mv "$temp_file" "$STATE_FILE"
 
     # Build review-fix prompt for Claude
     local next_prompt_file="$LOOP_DIR/round-${round}-prompt.md"
@@ -1659,15 +2021,16 @@ EOF
     fi
     append_task_tag_routing_note "$next_prompt_file"
 
-    jq -n \
-        --arg reason "$(cat "$next_prompt_file")" \
-        --arg msg "Loop: Review Phase Round $round - Fix code review issues" \
-        '{
-            "decision": "block",
-            "reason": $reason,
-            "systemMessage": $msg
-        }'
-    exit 0
+    if [[ "$return_to_implementation" == "true" ]]; then
+        commit_action_decision "$(cat "$next_prompt_file")" \
+            "Loop: Convergence regressed - return to implementation" \
+            "${FIELD_CURRENT_ROUND}=$round" \
+            "${FIELD_REVIEW_STARTED}=false"
+    else
+        commit_action_decision "$(cat "$next_prompt_file")" \
+            "Loop: Review Phase Round $round - Fix code review issues" \
+            "${FIELD_CURRENT_ROUND}=$round"
+    fi
 }
 
 # Block exit when codex review fails or produces no output
@@ -1734,15 +2097,8 @@ Stderr (last 50 lines):
         "CODEX_CMD_FILE=$CACHE_DIR/round-${round}-codex-review.cmd" \
         "CODEX_LOG_FILE=$CACHE_DIR/round-${round}-codex-review.log")
 
-    jq -n \
-        --arg reason "$reason" \
-        --arg msg "Loop: Blocked - Codex review failed, retry required" \
-        '{
-            "decision": "block",
-            "reason": $reason,
-            "systemMessage": $msg
-        }'
-    exit 0
+    commit_action_decision "$reason" \
+        "Loop: Blocked - Codex review failed, retry required"
 }
 
 # ========================================
@@ -1779,8 +2135,10 @@ echo "Codex command saved to: $CODEX_CMD_FILE" >&2
 echo "Running summary review with timeout ${CODEX_TIMEOUT}s..." >&2
 
 CODEX_EXIT_CODE=0
-printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$CODEX_TIMEOUT" codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_PROFILE_ARGS[@]}" exec "${CODEX_EXEC_ARGS[@]}" - \
-    > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
+run_fenced_reviewer "$REVIEW_PROMPT_FILE" "$CODEX_STDOUT_FILE" "$CODEX_STDERR_FILE" \
+    codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} \
+    "${CODEX_PROFILE_ARGS[@]}" exec \
+    "${CODEX_EXEC_ARGS[@]}" - || CODEX_EXIT_CODE=$?
 
 echo "Codex exit code: $CODEX_EXIT_CODE" >&2
 echo "Codex stdout saved to: $CODEX_STDOUT_FILE" >&2
@@ -1809,13 +2167,7 @@ $details
 
 Please retry or use \`/cancel-rlcr-loop\` to end the loop."
 
-    cat <<EOF
-{
-    "decision": "block",
-    "reason": $(echo "$REASON" | jq -Rs .)
-}
-EOF
-    exit 0
+    commit_action_decision "$REASON" "Loop: Blocked - Codex review failed, retry required"
 }
 
 # Check 1: Codex exit code indicates failure
@@ -1948,54 +2300,73 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
     fi
 fi
 
-# Handle COMPLETE - enter Review Phase or Finalize Phase
-if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
-    # In review phase, COMPLETE signal is ignored - only absence of [P0-9] triggers finalize
-    if [[ "$REVIEW_STARTED" == "true" ]]; then
-        echo "COMPLETE signal ignored in review phase. Codex review determines exit." >&2
-        # Fall through to continue with codex review logic below
-    else
-        # Implementation phase complete - transition to review phase
-        # Max iterations check
-        if [[ $CURRENT_ROUND -ge $MAX_ITERATIONS ]]; then
-            echo "Codex review passed but at max iterations ($MAX_ITERATIONS). Terminating as MAXITER." >&2
-            if enter_methodology_analysis_phase "maxiter" "Codex confirmed COMPLETE but at max iterations ($MAX_ITERATIONS)"; then
-                exit 0
-            fi
-            end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_MAXITER"
-            exit 0
-        fi
+# The max-iteration, COMPLETE, and ordinary next-round paths now share this
+# single reducer call.  No outcome below is selected directly from COMPLETE or
+# NEXT_ROUND.
+IMPLEMENTATION_REVIEWER_SIGNAL="$EXTRACTED_MAINLINE_VERDICT"
+case "$LAST_LINE_TRIMMED" in
+    "$MARKER_COMPLETE") IMPLEMENTATION_REVIEWER_SIGNAL=COMPLETE ;;
+    "$MARKER_STOP") IMPLEMENTATION_REVIEWER_SIGNAL=STOP ;;
+esac
+[[ "$MAINLINE_DRIFT_STOP" == "true" ]] && IMPLEMENTATION_REVIEWER_SIGNAL=mainline_drift
+case "$IMPLEMENTATION_REVIEWER_SIGNAL" in
+    advanced) IMPLEMENTATION_REVIEWER_SIGNAL=ADVANCED ;;
+    stalled) IMPLEMENTATION_REVIEWER_SIGNAL=STALLED ;;
+    regressed) IMPLEMENTATION_REVIEWER_SIGNAL=REGRESSED ;;
+    unknown|'') IMPLEMENTATION_REVIEWER_SIGNAL=none ;;
+esac
+prepare_reducer_decision implementation "$IMPLEMENTATION_REVIEWER_SIGNAL"
 
+case "$RLCR_REDUCER_ACTION" in
+    terminal_*) commit_reducer_terminal ;;
+    continue_optimize|continue_pivot|continue_closeout|enter_review) ;;
+    *)
+        RLCR_REDUCER_ACTION=terminal_blocked
+        RLCR_REDUCER_NEXT_PHASE=terminal
+        RLCR_CONVERGENCE_REASON=invalid_implementation_transition
+        commit_reducer_terminal
+        ;;
+esac
+
+# COMPLETE remains the plan/AC signal, but it can only enter review when the
+# independent convergence reducer selected enter_review.
+if [[ "$RLCR_REDUCER_ACTION" == "enter_review" ]]; then
+        # Implementation phase complete - transition to review phase.
         # Initialize skip tracking variables before any skip paths
         REVIEW_SKIPPED=""
         REVIEW_SKIP_REASON=""
 
         # Check if base_branch is available for code review
         if [[ -z "$BASE_BRANCH" ]]; then
-            echo "Warning: No base_branch configured, skipping code review phase." >&2
-            REVIEW_SKIPPED="true"
-            REVIEW_SKIP_REASON="No base_branch configured for code review"
+            RLCR_REDUCER_ACTION=terminal_blocked
+            RLCR_REDUCER_NEXT_PHASE=terminal
+            RLCR_CONVERGENCE_REASON=review_base_missing
+            commit_reducer_terminal
         else
             echo "Implementation complete. Entering Review Phase..." >&2
 
-            # Update state to indicate review phase has started and clear drift counters.
-            upsert_state_fields "$STATE_FILE" \
+            # Commit the review-phase marker and state as one generated action.
+            # The actual codex review runs on the successor Stop invocation, so
+            # one hook process can never consume two CODEX_TIMEOUT budgets.
+            REVIEW_MARKER_PREPARE="$LOOP_DIR/.review-phase-started.prepare.$$"
+            REVIEW_SIDECAR_MANIFEST="$LOOP_DIR/.review-phase-sidecars.prepare.$$"
+            printf 'build_finish_round=%s\n' "$CURRENT_ROUND" > "$REVIEW_MARKER_PREPARE"
+            printf '%s\t%s\n' "$REVIEW_MARKER_PREPARE" "$LOOP_DIR/.review-phase-started" \
+                > "$REVIEW_SIDECAR_MANIFEST"
+            RLCR_ACTION_SIDECAR_MANIFEST="$REVIEW_SIDECAR_MANIFEST"
+
+            REVIEW_READY_REASON="# Review Phase Ready
+
+The implementation review is complete. The loop has entered its isolated code-review phase.
+
+Attempt to exit again to run the single Codex code-review generation for round $((CURRENT_ROUND + 1))."
+            commit_action_decision "$REVIEW_READY_REASON" \
+                "Loop: Review Phase ready - retry exit to run code review" \
                 "${FIELD_REVIEW_STARTED}=true" \
                 "${FIELD_MAINLINE_STALL_COUNT}=0" \
                 "${FIELD_LAST_MAINLINE_VERDICT}=${MAINLINE_VERDICT_ADVANCED}" \
                 "${FIELD_DRIFT_STATUS}=${DRIFT_STATUS_NORMAL}"
-            REVIEW_STARTED="true"
-
-            # Create marker file to validate review phase was properly entered
-            # Also record which round build finished for monitor display
-            echo "build_finish_round=$CURRENT_ROUND" > "$LOOP_DIR/.review-phase-started"
-
-            # Run code review and handle results (may exit on issues/failure/success)
-            # Pass CURRENT_ROUND + 1 so all review phase files use the next round number
-            echo "Implementation complete. Running initial code review..." >&2
-            run_and_handle_code_review "$((CURRENT_ROUND + 1))" "Loop: Finalize Phase - Simplify and refactor code before completion"
         fi
-    fi
 fi
 
 fi  # End of implementation phase codex exec block (skipped when review_started is true)
@@ -2031,55 +2402,9 @@ Use \`/humanize:cancel-rlcr-loop\` to end this loop."
     run_and_handle_code_review "$((CURRENT_ROUND + 1))" "Loop: Finalize Phase - Code review passed"
 fi
 
-if [[ "$MAINLINE_DRIFT_STOP" == "true" ]] && [[ "$LAST_LINE_TRIMMED" != "$MARKER_STOP" ]] && [[ "$LAST_LINE_TRIMMED" != "$MARKER_COMPLETE" ]]; then
-    echo "Mainline progress stalled for $NEXT_MAINLINE_STALL_COUNT consecutive rounds. Triggering drift circuit breaker." >&2
-    stop_for_mainline_drift "$NEXT_MAINLINE_STALL_COUNT" "$NEXT_LAST_MAINLINE_VERDICT"
-fi
-
-# Handle STOP - circuit breaker triggered
-if [[ "$LAST_LINE_TRIMMED" == "$MARKER_STOP" ]]; then
-    echo "" >&2
-    echo "========================================" >&2
-    if [[ "$FULL_ALIGNMENT_CHECK" == "true" ]]; then
-        echo "CIRCUIT BREAKER TRIGGERED" >&2
-        echo "========================================" >&2
-        echo "Codex detected development stagnation during Full Alignment Check (Round $CURRENT_ROUND)." >&2
-        echo "The loop has been stopped to prevent further unproductive iterations." >&2
-        echo "" >&2
-        echo "Review the historical round files in .humanize/rlcr/$(basename "$LOOP_DIR")/ to understand what went wrong." >&2
-        echo "Consider:" >&2
-        echo "  - Revisiting the original plan for clarity" >&2
-        echo "  - Breaking down the task into smaller pieces" >&2
-        echo "  - Manually addressing the blocking issues" >&2
-    else
-        echo "UNEXPECTED CIRCUIT BREAKER" >&2
-        echo "========================================" >&2
-        echo "Codex output STOP during a non-alignment round (Round $CURRENT_ROUND)." >&2
-        echo "This is unusual - STOP is normally only expected during Full Alignment Checks (every $FULL_REVIEW_ROUND rounds)." >&2
-        echo "Honoring the STOP request and terminating the loop." >&2
-        echo "" >&2
-        echo "Review the review result to understand why Codex requested an early stop:" >&2
-        echo "  $REVIEW_RESULT_FILE" >&2
-    fi
-    echo "========================================" >&2
-    # Try to enter methodology analysis phase before final exit
-    if enter_methodology_analysis_phase "stop" "Circuit breaker triggered - stagnation detected at round $CURRENT_ROUND"; then
-        exit 0
-    fi
-    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_STOP"
-    exit 0
-fi
-
 # ========================================
 # Review Found Issues - Continue Loop
 # ========================================
-
-# Update state file for next round
-upsert_state_fields "$STATE_FILE" \
-    "${FIELD_CURRENT_ROUND}=${NEXT_ROUND}" \
-    "${FIELD_MAINLINE_STALL_COUNT}=${NEXT_MAINLINE_STALL_COUNT}" \
-    "${FIELD_LAST_MAINLINE_VERDICT}=${NEXT_LAST_MAINLINE_VERDICT}" \
-    "${FIELD_DRIFT_STATUS}=${NEXT_DRIFT_STATUS}"
 
 # Create next round prompt
 NEXT_PROMPT_FILE="$LOOP_DIR/round-${NEXT_ROUND}-prompt.md"
@@ -2291,18 +2616,16 @@ fi
 
 # Build system message
 SYSTEM_MSG="Loop: Round $NEXT_ROUND/$MAX_ITERATIONS - Codex found issues to address"
-if [[ "$DRIFT_REPLAN_REQUIRED" == "true" ]]; then
+if [[ "$RLCR_REDUCER_ACTION" == "continue_pivot" ]]; then
     SYSTEM_MSG="Loop: Round $NEXT_ROUND/$MAX_ITERATIONS - Mainline drift detected, replan required"
+elif [[ "$RLCR_REDUCER_ACTION" == "continue_closeout" ]]; then
+    SYSTEM_MSG="Loop: Round $NEXT_ROUND/$MAX_ITERATIONS - performance passed, complete AC closeout"
 fi
 
-# Block exit and send review feedback
-jq -n \
-    --arg reason "$(cat "$NEXT_PROMPT_FILE")" \
-    --arg msg "$SYSTEM_MSG" \
-    '{
-        "decision": "block",
-        "reason": $reason,
-        "systemMessage": $msg
-    }'
-
-exit 0
+# Canonical action commit: prompt/outbox sidecars already exist, then the
+# structured state rename advances the logical round exactly once.
+commit_action_decision "$(cat "$NEXT_PROMPT_FILE")" "$SYSTEM_MSG" \
+    "${FIELD_CURRENT_ROUND}=${NEXT_ROUND}" \
+    "${FIELD_MAINLINE_STALL_COUNT}=${NEXT_MAINLINE_STALL_COUNT}" \
+    "${FIELD_LAST_MAINLINE_VERDICT}=${NEXT_LAST_MAINLINE_VERDICT}" \
+    "${FIELD_DRIFT_STATUS}=${NEXT_DRIFT_STATUS}"

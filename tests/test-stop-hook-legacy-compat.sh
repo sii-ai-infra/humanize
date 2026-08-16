@@ -14,6 +14,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$SCRIPT_DIR/test-helpers.sh"
+source "$PROJECT_ROOT/hooks/lib/rlcr-reducer.sh"
+source "$PROJECT_ROOT/hooks/lib/rlcr-control.sh"
 
 STOP_HOOK="$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh"
 
@@ -194,6 +196,32 @@ else
         "Legacy loops without bitlesson_required still reach Codex even when .humanize/bitlesson.md exists" \
         "exit 0 and Codex invoked" \
         "exit $RUN_EXIT_CODE, marker=$(test -f "$RUN_MARKER" && echo present || echo missing), output: $RUN_OUTPUT"
+fi
+
+echo "Test 3: Legacy hard max still exempts review and finalize closeout"
+LEGACY_CONTROL_REPO="$TEST_DIR/test3"
+mkdir -p "$LEGACY_CONTROL_REPO/.humanize/rlcr/legacy-control"
+LEGACY_CONTROL_LOOP="$LEGACY_CONTROL_REPO/.humanize/rlcr/legacy-control"
+unset RLCR_REDUCER_ENABLED
+rlcr_control_decide "$LEGACY_CONTROL_REPO" "$LEGACY_CONTROL_LOOP" \
+    implementation none 42 42 0 2 "" ""
+LEGACY_IMPLEMENTATION_ACTION="$RLCR_REDUCER_ACTION"
+rlcr_control_decide "$LEGACY_CONTROL_REPO" "$LEGACY_CONTROL_LOOP" \
+    review none 42 42 99 2 "" ""
+LEGACY_REVIEW_ACTION="$RLCR_REDUCER_ACTION"
+rlcr_control_decide "$LEGACY_CONTROL_REPO" "$LEGACY_CONTROL_LOOP" \
+    finalize COMPLETE 42 42 99 2 "" ""
+LEGACY_FINALIZE_ACTION="$RLCR_REDUCER_ACTION"
+
+if [[ "$LEGACY_IMPLEMENTATION_ACTION" == "terminal_budget" \
+      && "$LEGACY_REVIEW_ACTION" == "continue_closeout" \
+      && "$LEGACY_FINALIZE_ACTION" == "terminal_success" ]]; then
+    pass "Legacy implementation keeps hard max while review/finalize finish closeout"
+else
+    fail \
+        "Legacy implementation keeps hard max while review/finalize finish closeout" \
+        "terminal_budget / continue_closeout / terminal_success" \
+        "$LEGACY_IMPLEMENTATION_ACTION / $LEGACY_REVIEW_ACTION / $LEGACY_FINALIZE_ACTION"
 fi
 
 print_test_summary "Stop Hook Legacy Compatibility Test Summary"

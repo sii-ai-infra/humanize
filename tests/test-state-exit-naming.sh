@@ -206,7 +206,7 @@ fi
 # Test 9: end_loop creates correct file for each valid reason
 echo "Test 9: end_loop creates correct files for valid reasons"
 REASONS_PASS=true
-for reason in complete cancel maxiter stop unexpected; do
+for reason in complete maxiter stop unexpected; do
     mkdir -p "$END_LOOP_TEST_DIR"
     cat > "$END_LOOP_TEST_DIR/state.md" << 'EOF'
 ---
@@ -226,7 +226,25 @@ EOF
     rm -f "$EXPECTED_FILE"
 done
 if [[ "$REASONS_PASS" == "true" ]]; then
-    pass "end_loop creates correct files for all valid reasons"
+    pass "end_loop creates correct files for all non-cancel terminal reasons"
+fi
+
+# Cancellation has one canonical transaction because it must also clear the
+# pending session handshake; end_loop must not remain a third implementation.
+cat > "$END_LOOP_TEST_DIR/state.md" << 'EOF'
+---
+current_round: 0
+---
+EOF
+set +e
+RESULT=$(end_loop "$END_LOOP_TEST_DIR" "$END_LOOP_TEST_DIR/state.md" cancel 2>&1)
+EXIT_CODE=$?
+set -e
+if [[ $EXIT_CODE -ne 0 && -f "$END_LOOP_TEST_DIR/state.md" \
+   && ! -f "$END_LOOP_TEST_DIR/cancel-state.md" ]]; then
+    pass "end_loop rejects cancel so the canonical cancel transaction is unique"
+else
+    fail "end_loop cancel convergence" "cancel rejected without state rename" "exit $EXIT_CODE: $RESULT"
 fi
 
 # Test 10: end_loop handles missing state file

@@ -588,22 +588,20 @@ cat > "$LOOP_DIR/round-3-summary.md" << 'EOF'
 Implemented all features.
 EOF
 
-echo "T-POS-1: COMPLETE triggers Finalize Phase entry"
+echo "T-POS-1: COMPLETE commits Review Phase readiness (one Codex per hook)"
 HOOK_INPUT='{"stop_hook_active": false, "transcript": []}'
 set +e
 RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
 EXIT_CODE=$?
 set -e
-# Should block with Finalize phase prompt and create finalize-state.md
-if echo "$RESULT" | grep -q '"decision".*block' && [[ -f "$LOOP_DIR/finalize-state.md" ]] && [[ ! -f "$LOOP_DIR/state.md" ]]; then
-    # Also check the prompt mentions code-simplifier
-    if echo "$RESULT" | grep -qi "simplif"; then
-        pass "COMPLETE triggers Finalize Phase (state.md -> finalize-state.md, block with Finalize prompt)"
-    else
-        fail "COMPLETE Finalize prompt" "prompt mentioning simplification" "output: $RESULT"
-    fi
+# F-9 splits codex exec and codex review across successor Stop invocations.
+if echo "$RESULT" | grep -q '"decision".*block' \
+   && [[ -f "$LOOP_DIR/state.md" ]] \
+   && [[ -f "$LOOP_DIR/.review-phase-started" ]] \
+   && grep -q '^review_started: true$' "$LOOP_DIR/state.md"; then
+    pass "COMPLETE commits review-ready state without a second Codex call"
 else
-    fail "COMPLETE Finalize entry" "block with finalize-state.md" "exit $EXIT_CODE, files: $(ls $LOOP_DIR/*state*.md 2>/dev/null || echo 'none'), output: $RESULT"
+    fail "COMPLETE Review Phase entry" "block with review_started=true and marker" "exit $EXIT_CODE, files: $(ls $LOOP_DIR/*state*.md 2>/dev/null || echo 'none'), output: $RESULT"
 fi
 
 # T-NEG-1: Max iterations skips Finalize
@@ -649,6 +647,14 @@ Implemented all features.
 EOF
 
 HOOK_INPUT='{"stop_hook_active": false, "transcript": []}'
+set +e
+RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
+EXIT_CODE=$?
+set -e
+
+# F-9/R4: the first Stop commits review readiness.  The immediately invoked
+# successor is identified by its persisted generation/phase tuple; no wall
+# clock delay participates in acknowledgement.
 set +e
 RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
 EXIT_CODE=$?
@@ -710,6 +716,12 @@ Implemented all features.
 EOF
 
 HOOK_INPUT='{"stop_hook_active": false, "transcript": []}'
+set +e
+RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
+EXIT_CODE=$?
+set -e
+
+# Immediate successor: ack correctness must be independent of elapsed time.
 set +e
 RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
 EXIT_CODE=$?
@@ -892,11 +904,11 @@ echo ""
 echo "=== T-POS-6 / T-NEG-10: Mainline Drift State Machine ==="
 echo ""
 
-# T-POS-6: Two consecutive stalled rounds trigger drift recovery prompt
+# T-POS-6: Eight consecutive stalled rounds trigger drift recovery prompt
 rm -rf "$TEST_DIR/.humanize"
 setup_test_repo
 setup_loop_dir 3 10
-perl -0pi -e 's/mainline_stall_count: 0/mainline_stall_count: 1/' "$LOOP_DIR/state.md"
+perl -0pi -e 's/mainline_stall_count: 0/mainline_stall_count: 7/' "$LOOP_DIR/state.md"
 perl -0pi -e 's/last_mainline_verdict: unknown/last_mainline_verdict: stalled/' "$LOOP_DIR/state.md"
 
 setup_mock_codex "## Review Feedback
@@ -920,7 +932,7 @@ cat > "$TRANSCRIPT_FILE" << 'EOF'
 {"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "TodoWrite", "input": {"todos": [{"content": "[mainline] Recover AC-1", "status": "completed", "activeForm": "Recovering AC-1"}]}}]}}
 EOF
 
-echo "T-POS-6: Two stalled rounds trigger drift recovery prompt"
+echo "T-POS-6: Eight stalled rounds trigger drift recovery prompt"
 HOOK_INPUT='{"stop_hook_active": false, "transcript_path": "'$TRANSCRIPT_FILE'"}'
 set +e
 RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
@@ -940,10 +952,10 @@ else
 fi
 
 parse_state_file "$LOOP_DIR/state.md"
-if [[ "$STATE_CURRENT_ROUND" == "4" ]] && [[ "$STATE_MAINLINE_STALL_COUNT" == "2" ]] && [[ "$STATE_LAST_MAINLINE_VERDICT" == "stalled" ]] && [[ "$STATE_DRIFT_STATUS" == "replan_required" ]]; then
-    pass "State records drift recovery requirement after second stalled round"
+if [[ "$STATE_CURRENT_ROUND" == "4" ]] && [[ "$STATE_MAINLINE_STALL_COUNT" == "8" ]] && [[ "$STATE_LAST_MAINLINE_VERDICT" == "stalled" ]] && [[ "$STATE_DRIFT_STATUS" == "replan_required" ]]; then
+    pass "State records drift recovery requirement after eighth stalled round"
 else
-    fail "Drift recovery state update" "round=4 stall=2 verdict=stalled drift=replan_required" \
+    fail "Drift recovery state update" "round=4 stall=8 verdict=stalled drift=replan_required" \
         "round=$STATE_CURRENT_ROUND stall=$STATE_MAINLINE_STALL_COUNT verdict=$STATE_LAST_MAINLINE_VERDICT drift=$STATE_DRIFT_STATUS"
 fi
 
@@ -995,11 +1007,11 @@ else
         "round=$STATE_CURRENT_ROUND stall=$STATE_MAINLINE_STALL_COUNT verdict=$STATE_LAST_MAINLINE_VERDICT drift=$STATE_DRIFT_STATUS"
 fi
 
-# T-NEG-10: Third consecutive stalled/regressed round stops the loop
+# T-NEG-10: Eleventh consecutive stalled/regressed round stops the loop
 rm -rf "$TEST_DIR/.humanize"
 setup_test_repo
 setup_loop_dir 3 10
-perl -0pi -e 's/mainline_stall_count: 0/mainline_stall_count: 2/' "$LOOP_DIR/state.md"
+perl -0pi -e 's/mainline_stall_count: 0/mainline_stall_count: 10/' "$LOOP_DIR/state.md"
 perl -0pi -e 's/last_mainline_verdict: unknown/last_mainline_verdict: stalled/' "$LOOP_DIR/state.md"
 perl -0pi -e 's/drift_status: normal/drift_status: replan_required/' "$LOOP_DIR/state.md"
 
@@ -1019,7 +1031,7 @@ cat > "$LOOP_DIR/round-3-summary.md" << 'EOF'
 The latest attempt regressed the mainline objective again.
 EOF
 
-echo "T-NEG-10: Third stalled/regressed round triggers circuit breaker"
+echo "T-NEG-10: Eleventh stalled/regressed round triggers circuit breaker"
 HOOK_INPUT='{"stop_hook_active": false, "transcript_path": "'$TRANSCRIPT_FILE'"}'
 set +e
 RESULT=$(echo "$HOOK_INPUT" | "$PROJECT_ROOT/hooks/loop-codex-stop-hook.sh" 2>&1)
@@ -1027,16 +1039,16 @@ EXIT_CODE=$?
 set -e
 
 if [[ -f "$LOOP_DIR/stop-state.md" ]] && echo "$RESULT" | grep -qi "drift"; then
-    pass "Third stalled/regressed round stops the loop with drift message"
+    pass "Eleventh stalled/regressed round stops the loop with drift message"
 else
     fail "Drift circuit breaker" "stop-state.md and drift message" "exit $EXIT_CODE, files: $(ls "$LOOP_DIR"/*state*.md 2>/dev/null || echo 'none'), output: $RESULT"
 fi
 
 parse_state_file "$LOOP_DIR/stop-state.md"
-if [[ "$STATE_MAINLINE_STALL_COUNT" == "3" ]] && [[ "$STATE_LAST_MAINLINE_VERDICT" == "regressed" ]] && [[ "$STATE_DRIFT_STATUS" == "replan_required" ]]; then
+if [[ "$STATE_MAINLINE_STALL_COUNT" == "11" ]] && [[ "$STATE_LAST_MAINLINE_VERDICT" == "regressed" ]] && [[ "$STATE_DRIFT_STATUS" == "replan_required" ]]; then
     pass "Stopped loop preserves final drift state"
 else
-    fail "Preserved drift state on stop" "stall=3 verdict=regressed drift=replan_required" \
+    fail "Preserved drift state on stop" "stall=11 verdict=regressed drift=replan_required" \
         "stall=$STATE_MAINLINE_STALL_COUNT verdict=$STATE_LAST_MAINLINE_VERDICT drift=$STATE_DRIFT_STATUS"
 fi
 

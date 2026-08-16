@@ -482,6 +482,51 @@ else
 fi
 
 echo ""
+echo "=== Test: RLCR Control Provenance Protection ==="
+echo ""
+
+assert_provenance_hook_blocked() {
+    local test_name="$1"
+    local hook="$2"
+    local hook_input="$3"
+
+    set +e
+    RESULT=$(printf '%s' "$hook_input" | "$hook" 2>&1)
+    EXIT_CODE=$?
+    set -e
+
+    if [[ "$EXIT_CODE" -eq 2 ]] && echo "$RESULT" | grep -qi "provenance"; then
+        pass "$test_name"
+    else
+        fail "$test_name" "exit 2 with provenance protection error" \
+            "exit $EXIT_CODE, output: $RESULT"
+    fi
+}
+
+PROVENANCE_PATH="$TEST_DIR/.pipeline/loop_provenance.json"
+
+echo "Test 25b: Write validator protects loop_provenance.json"
+assert_provenance_hook_blocked \
+    "Write validator protects loop_provenance.json" \
+    "$PROJECT_ROOT/hooks/loop-write-validator.sh" \
+    "$(jq -nc --arg path "$PROVENANCE_PATH" \
+        '{tool_name:"Write",tool_input:{file_path:$path,content:"{}"}}')"
+
+echo "Test 25c: Edit validator protects relative loop_provenance.json"
+assert_provenance_hook_blocked \
+    "Edit validator protects relative loop_provenance.json" \
+    "$PROJECT_ROOT/hooks/loop-edit-validator.sh" \
+    "$(jq -nc \
+        '{tool_name:"Edit",tool_input:{file_path:".pipeline/loop_provenance.json",old_string:"rlcr",new_string:"legacy"}}')"
+
+echo "Test 25d: Bash validator protects loop_provenance.json"
+assert_provenance_hook_blocked \
+    "Bash validator protects loop_provenance.json" \
+    "$PROJECT_ROOT/hooks/loop-bash-validator.sh" \
+    "$(jq -nc --arg command "printf '{}\\n' > '$PROVENANCE_PATH'" \
+        '{tool_name:"Bash",tool_input:{command:$command}}')"
+
+echo ""
 echo "=== Test: Bash Validator Hook Wrapper Blocking ==="
 echo ""
 

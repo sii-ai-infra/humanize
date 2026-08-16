@@ -87,8 +87,10 @@ LOOP_BASE_DIR="$PROJECT_ROOT/.humanize/rlcr"
 # succeed regardless of which session invokes it. If a user types /cancel-rlcr-loop,
 # they want to cancel whatever loop is running in the current project directory.
 #
-# Find newest active loop directory (any session) using the same lookup as hooks
-LOOP_DIR=$(find_active_loop "$LOOP_BASE_DIR")
+# Explicit cancellation searches past newer terminal sessions.  Hook lookup
+# remains strict, but a user cancel must find the newest loop that is actually
+# still active in a multi-session project.
+LOOP_DIR=$(find_newest_active_loop_for_cancel "$LOOP_BASE_DIR")
 
 if [[ -z "$LOOP_DIR" ]]; then
     echo "NO_LOOP"
@@ -153,17 +155,14 @@ fi
 # Perform Cancellation
 # ========================================
 
-# Create cancel signal file
-touch "$CANCEL_SIGNAL"
-
-# Clean up any pending session_id signal file (setup may not have completed)
-rm -f "$PROJECT_ROOT/.humanize/.pending-session-id"
-
-# Clean up methodology analysis marker files if present
-rm -f "$LOOP_DIR/.methodology-exit-reason"
-
-# Rename state file to cancel-state.md
-mv "$ACTIVE_STATE_FILE" "$LOOP_DIR/cancel-state.md"
+# Both cancel entry points use the same fenced transaction.  Sidecars are
+# resolved before the active-state rename, which is the commit point.
+if ! rlcr_cancel_transaction "$LOOP_BASE_DIR" "$LOOP_DIR" \
+    "$PROJECT_ROOT/.humanize/.pending-session-id"; then
+    echo "NO_ACTIVE_LOOP"
+    echo "The loop stopped being active before cancellation committed." >&2
+    exit 1
+fi
 
 # ========================================
 # Output Result

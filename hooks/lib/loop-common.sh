@@ -43,6 +43,19 @@ readonly FIELD_PRIVACY_MODE="privacy_mode"
 readonly FIELD_MAINLINE_STALL_COUNT="mainline_stall_count"
 readonly FIELD_LAST_MAINLINE_VERDICT="last_mainline_verdict"
 readonly FIELD_DRIFT_STATUS="drift_status"
+readonly FIELD_CONTROL_EPOCH="control_epoch"
+readonly FIELD_PENDING_ACTION_ID="pending_action_id"
+readonly FIELD_PENDING_SUCCESSOR_GENERATION="pending_successor_generation"
+readonly FIELD_PENDING_SUCCESSOR_PHASE="pending_successor_phase"
+readonly FIELD_ACK_ACTION_ID="ack_action_id"
+readonly FIELD_ACK_SUCCESSOR_GENERATION="ack_successor_generation"
+readonly FIELD_ACK_SUCCESSOR_PHASE="ack_successor_phase"
+readonly FIELD_LAST_APPLIED_ACTION_ID="last_applied_action_id"
+readonly FIELD_CLOSEOUT_STEPS="closeout_steps"
+readonly FIELD_MAX_CLOSEOUT_STEPS="max_closeout_steps"
+readonly FIELD_LAST_CONVERGENCE_DIGEST="last_convergence_digest"
+readonly FIELD_LAST_CANDIDATE_FINGERPRINT="last_candidate_fingerprint"
+readonly FIELD_LAST_REDUCER_ACTION="last_reducer_action"
 
 readonly MAINLINE_VERDICT_ADVANCED="advanced"
 readonly MAINLINE_VERDICT_STALLED="stalled"
@@ -66,12 +79,10 @@ readonly MARKER_STOP="STOP"
 
 # Exit reasons (used with end_loop function)
 # complete   - Codex confirmed all goals achieved (normal success)
-# cancel     - User cancelled with /cancel-rlcr-loop
 # maxiter    - Reached maximum iterations limit
 # stop       - Codex triggered circuit breaker (stagnation detected)
 # unexpected - System error or invalid state (e.g., corrupted state file)
 readonly EXIT_COMPLETE="complete"
-readonly EXIT_CANCEL="cancel"
 readonly EXIT_MAXITER="maxiter"
 readonly EXIT_STOP="stop"
 readonly EXIT_UNEXPECTED="unexpected"
@@ -173,6 +184,13 @@ is_deeply_nested() {
 LOOP_COMMON_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 LOOP_COMMON_PLUGIN_ROOT="$(cd "$LOOP_COMMON_DIR/../.." && pwd)"
 export PLUGIN_ROOT="${PLUGIN_ROOT:-$LOOP_COMMON_PLUGIN_ROOT}"
+
+# Zero-dependency state/lock/outbox primitives.  Keep this leaf source before
+# the eager config/template setup so lightweight consumers can source the leaf
+# directly without paying loop-common's initialization cost.
+source "$LOOP_COMMON_DIR/loop-state-write.sh"
+source "$LOOP_COMMON_DIR/rlcr-reducer.sh"
+source "$LOOP_COMMON_DIR/rlcr-control.sh"
 
 # Shared project-root resolver (CLAUDE_PROJECT_DIR -> git toplevel,
 # realpath-canonicalized). Must load before any caller needs PROJECT_ROOT.
@@ -427,6 +445,25 @@ find_active_loop() {
     echo ""
 }
 
+# Explicit user cancellation is allowed to search past newer terminal sessions.
+# Hook/validator lookup intentionally retains find_active_loop's zombie-loop
+# protection; only cancel uses this broader selector.
+find_newest_active_loop_for_cancel() {
+    local loop_base_dir="$1"
+    local dir active_state
+    [[ -d "$loop_base_dir" ]] || { echo ""; return; }
+    while IFS= read -r dir; do
+        [[ -n "$dir" ]] || continue
+        dir="${dir%/}"
+        active_state=$(resolve_active_state_file "$dir")
+        if [[ -n "$active_state" ]]; then
+            echo "$dir"
+            return
+        fi
+    done < <(ls -1d "$loop_base_dir"/*/ 2>/dev/null | sort -r)
+    echo ""
+}
+
 # Extract current round number from state.md
 # Outputs the round number to stdout, defaults to 0
 # Note: For full state parsing, use parse_state_file() instead
@@ -470,6 +507,19 @@ _parse_state_fields() {
     STATE_MAINLINE_STALL_COUNT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_MAINLINE_STALL_COUNT}:" | sed "s/${FIELD_MAINLINE_STALL_COUNT}: *//" | tr -d ' ' || true)
     STATE_LAST_MAINLINE_VERDICT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_LAST_MAINLINE_VERDICT}:" | sed "s/${FIELD_LAST_MAINLINE_VERDICT}: *//" | tr -d ' ' || true)
     STATE_DRIFT_STATUS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_DRIFT_STATUS}:" | sed "s/${FIELD_DRIFT_STATUS}: *//" | tr -d ' ' || true)
+    STATE_CONTROL_EPOCH=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CONTROL_EPOCH}:" | sed "s/${FIELD_CONTROL_EPOCH}: *//" | tr -d ' ' || true)
+    STATE_PENDING_ACTION_ID=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_PENDING_ACTION_ID}:" | sed "s/${FIELD_PENDING_ACTION_ID}: *//" || true)
+    STATE_PENDING_SUCCESSOR_GENERATION=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_PENDING_SUCCESSOR_GENERATION}:" | sed "s/${FIELD_PENDING_SUCCESSOR_GENERATION}: *//" || true)
+    STATE_PENDING_SUCCESSOR_PHASE=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_PENDING_SUCCESSOR_PHASE}:" | sed "s/${FIELD_PENDING_SUCCESSOR_PHASE}: *//" || true)
+    STATE_ACK_ACTION_ID=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_ACK_ACTION_ID}:" | sed "s/${FIELD_ACK_ACTION_ID}: *//" || true)
+    STATE_ACK_SUCCESSOR_GENERATION=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_ACK_SUCCESSOR_GENERATION}:" | sed "s/${FIELD_ACK_SUCCESSOR_GENERATION}: *//" || true)
+    STATE_ACK_SUCCESSOR_PHASE=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_ACK_SUCCESSOR_PHASE}:" | sed "s/${FIELD_ACK_SUCCESSOR_PHASE}: *//" || true)
+    STATE_LAST_APPLIED_ACTION_ID=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_LAST_APPLIED_ACTION_ID}:" | sed "s/${FIELD_LAST_APPLIED_ACTION_ID}: *//" || true)
+    STATE_CLOSEOUT_STEPS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CLOSEOUT_STEPS}:" | sed "s/${FIELD_CLOSEOUT_STEPS}: *//" | tr -d ' ' || true)
+    STATE_MAX_CLOSEOUT_STEPS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_MAX_CLOSEOUT_STEPS}:" | sed "s/${FIELD_MAX_CLOSEOUT_STEPS}: *//" | tr -d ' ' || true)
+    STATE_LAST_CONVERGENCE_DIGEST=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_LAST_CONVERGENCE_DIGEST}:" | sed "s/${FIELD_LAST_CONVERGENCE_DIGEST}: *//" || true)
+    STATE_LAST_CANDIDATE_FINGERPRINT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_LAST_CANDIDATE_FINGERPRINT}:" | sed "s/${FIELD_LAST_CANDIDATE_FINGERPRINT}: *//" || true)
+    STATE_LAST_REDUCER_ACTION=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_LAST_REDUCER_ACTION}:" | sed "s/${FIELD_LAST_REDUCER_ACTION}: *//" || true)
 }
 
 # Parse state file frontmatter and set variables (tolerant mode with defaults)
@@ -521,6 +571,12 @@ parse_state_file() {
     STATE_MAINLINE_STALL_COUNT="${STATE_MAINLINE_STALL_COUNT:-0}"
     STATE_LAST_MAINLINE_VERDICT="${STATE_LAST_MAINLINE_VERDICT:-$MAINLINE_VERDICT_UNKNOWN}"
     STATE_DRIFT_STATUS="${STATE_DRIFT_STATUS:-$DRIFT_STATUS_NORMAL}"
+    STATE_CONTROL_EPOCH="${STATE_CONTROL_EPOCH:-0}"
+    STATE_CLOSEOUT_STEPS="${STATE_CLOSEOUT_STEPS:-0}"
+    STATE_MAX_CLOSEOUT_STEPS="${STATE_MAX_CLOSEOUT_STEPS:-$RLCR_DEFAULT_MAX_CLOSEOUT_STEPS}"
+    STATE_LAST_CONVERGENCE_DIGEST="${STATE_LAST_CONVERGENCE_DIGEST:-}"
+    STATE_LAST_CANDIDATE_FINGERPRINT="${STATE_LAST_CANDIDATE_FINGERPRINT:-}"
+    STATE_LAST_REDUCER_ACTION="${STATE_LAST_REDUCER_ACTION:-}"
     # STATE_REVIEW_STARTED left as-is (empty if missing, to allow schema validation)
 
     return 0
@@ -600,6 +656,7 @@ parse_state_file_strict() {
     STATE_MAINLINE_STALL_COUNT="${STATE_MAINLINE_STALL_COUNT:-0}"
     STATE_LAST_MAINLINE_VERDICT="${STATE_LAST_MAINLINE_VERDICT:-$MAINLINE_VERDICT_UNKNOWN}"
     STATE_DRIFT_STATUS="${STATE_DRIFT_STATUS:-$DRIFT_STATUS_NORMAL}"
+    STATE_CONTROL_EPOCH="${STATE_CONTROL_EPOCH:-0}"
 
     return 0
 }
@@ -666,59 +723,12 @@ extract_mainline_progress_verdict() {
     normalize_mainline_progress_verdict "$verdict_value"
 }
 
-# Upsert simple YAML frontmatter fields in a state file.
-# Values must not contain newlines.
+# Apply a schema-validated YAML frontmatter transition under the shared RLCR
+# lease.  Assignments remain separate argv entries, so a value can never inject
+# another field through shell word splitting.
 # Usage: upsert_state_fields "/path/to/state.md" "field=value" "other=value"
 upsert_state_fields() {
-    local state_file="$1"
-    shift
-
-    local temp_file="${state_file}.tmp.$$"
-
-    awk -v assignments="$*" '
-        BEGIN {
-            count = split(assignments, pairs, " ");
-            for (i = 1; i <= count; i++) {
-                eq = index(pairs[i], "=");
-                key = substr(pairs[i], 1, eq - 1);
-                val = substr(pairs[i], eq + 1);
-                keys[key] = val;
-                order[i] = key;
-            }
-            separator_count = 0;
-        }
-        {
-            if ($0 == "---") {
-                separator_count++;
-                if (separator_count == 2) {
-                    for (i = 1; i <= count; i++) {
-                        key = order[i];
-                        if (!(key in seen)) {
-                            print key ": " keys[key];
-                            seen[key] = 1;
-                        }
-                    }
-                }
-                print;
-                next;
-            }
-
-            handled = 0;
-            for (i = 1; i <= count; i++) {
-                key = order[i];
-                if ($0 ~ ("^" key ":")) {
-                    print key ": " keys[key];
-                    seen[key] = 1;
-                    handled = 1;
-                    break;
-                }
-            }
-
-            if (!handled) {
-                print;
-            }
-        }
-    ' "$state_file" > "$temp_file" && mv "$temp_file" "$state_file"
+    rlcr_state_update "$@"
 }
 
 # Detect review issues from codex review log file
@@ -873,6 +883,34 @@ state_file_blocked_message() {
 You cannot modify state.md. This file is managed by the loop system."
 
     load_and_render_safe "$TEMPLATE_DIR" "block/state-file-modification.md" "$fallback"
+}
+
+# Check whether a candidate-controlled tool path targets the KOP provenance
+# marker that selects the strict RLCR convergence consumer.  The marker lives
+# outside .humanize/, so it must be compared explicitly before the normal
+# loop-directory early exits in the Write/Edit validators.
+is_loop_provenance_path() {
+    local file_path="$1"
+    local project_root="$2"
+    local candidate="$file_path"
+    local expected="$project_root/.pipeline/loop_provenance.json"
+
+    [[ -n "$candidate" && -n "$project_root" ]] || return 1
+    [[ "$candidate" == /* ]] || candidate="$project_root/$candidate"
+    candidate=$(_normalize_path "$candidate")
+    expected=$(_normalize_path "$expected")
+    candidate=$(canonicalize_path_prefix "$candidate" 2>/dev/null || printf '%s\n' "$candidate")
+    expected=$(canonicalize_path_prefix "$expected" 2>/dev/null || printf '%s\n' "$expected")
+    [[ "$candidate" == "$expected" ]]
+}
+
+loop_provenance_blocked_message() {
+    cat <<'EOF'
+# RLCR Control Provenance Modification Blocked
+
+You cannot modify .pipeline/loop_provenance.json during an active RLCR loop.
+This file selects the trusted convergence reducer and is managed by the control plane.
+EOF
 }
 
 # Standard message for blocking finalize-state file modifications
@@ -1541,20 +1579,24 @@ Rules:
 }
 
 # End the loop by renaming state.md to indicate exit reason
-# Usage: end_loop "$loop_dir" "$state_file" "complete|cancel|maxiter|stop|unexpected"
+# Cancellation is intentionally excluded: both cancel CLIs use the sole
+# rlcr_cancel_transaction implementation, which also clears project/session
+# handshake sidecars.  Adding cancel here would recreate the stale-handshake
+# bug that W4a.5 removes.
+# Usage: end_loop "$loop_dir" "$state_file" "complete|maxiter|stop|unexpected"
 # Arguments:
 #   $1 - loop_dir: Path to the loop directory
 #   $2 - state_file: Path to the state.md file
-#   $3 - reason: One of complete, cancel, maxiter, stop, unexpected
+#   $3 - reason: One of complete, maxiter, stop, unexpected
 # Returns: 0 on success, 1 on failure
 end_loop() {
     local loop_dir="$1"
     local state_file="$2"
-    local reason="$3"  # complete, cancel, maxiter, stop, unexpected
+    local reason="$3"  # complete, maxiter, stop, unexpected
 
     # Validate reason
     case "$reason" in
-        complete|cancel|maxiter|stop|unexpected)
+        complete|maxiter|stop|unexpected)
             ;;
         *)
             echo "Error: Invalid end_loop reason: $reason" >&2
@@ -1565,7 +1607,12 @@ end_loop() {
     local target_name="${reason}-state.md"
 
     if [[ -f "$state_file" ]]; then
-        mv "$state_file" "$loop_dir/$target_name"
+        local scope_dir
+        scope_dir=$(dirname "$loop_dir")
+        if ! rlcr_phase_transition "$scope_dir" "$loop_dir" "$state_file" "$loop_dir/$target_name"; then
+            echo "Warning: fenced RLCR terminal transition did not commit" >&2
+            return 1
+        fi
         echo "Loop ended: $reason" >&2
         echo "State preserved as: $loop_dir/$target_name" >&2
         return 0

@@ -28,6 +28,7 @@ HOOK_INPUT=$(cat)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/project-root.sh"
+source "$SCRIPT_DIR/lib/loop-state-write.sh"
 
 HOOK_COMMAND=""
 HOOK_CWD=""
@@ -111,7 +112,10 @@ try_select_signal_file() {
     candidate_root=$(resolve_candidate_root "$candidate_dir") || return 1
     candidate_signal="$candidate_root/.humanize/.pending-session-id"
     if [[ ! -f "$candidate_signal" ]]; then
-        return 1
+        # A writer killed after claiming the handshake but before the state
+        # commit leaves this recoverable signal behind.
+        candidate_signal="${candidate_signal}.claimed"
+        [[ -f "$candidate_signal" ]] || return 1
     fi
 
     {
@@ -146,6 +150,10 @@ fi
 # Read the signal file contents
 # Line 1: state file path
 # Line 2: full resolved path of setup script (command signature)
+if [[ ! -f "$SIGNAL_FILE" && -f "${SIGNAL_FILE}.claimed" ]]; then
+    SIGNAL_FILE="${SIGNAL_FILE}.claimed"
+fi
+[[ -f "$SIGNAL_FILE" ]] || exit 0
 STATE_FILE_PATH=""
 COMMAND_SIGNATURE=""
 {
@@ -153,11 +161,18 @@ COMMAND_SIGNATURE=""
     read -r COMMAND_SIGNATURE || true
 } < "$SIGNAL_FILE"
 
-if [[ -z "$STATE_FILE_PATH" ]] || [[ ! -f "$STATE_FILE_PATH" ]]; then
-    # Signal file is empty or points to non-existent state file - clean up
-    rm -f "$SIGNAL_FILE"
+if [[ -z "$STATE_FILE_PATH" ]]; then
     exit 0
 fi
+
+# The setup handshake may only target a normal state file inside this project.
+case "$STATE_FILE_PATH" in
+    "$PROJECT_ROOT/.humanize/rlcr/"*/state.md) ;;
+    *)
+        echo "Warning: ignoring unsafe RLCR session handshake target: $STATE_FILE_PATH" >&2
+        exit 0
+        ;;
+esac
 
 # Re-check the selected signal before consuming it. Candidate selection above
 # may have skipped stale signals from other roots, but this is the authorization gate.
@@ -177,24 +192,54 @@ if [[ -z "$SESSION_ID" ]]; then
     exit 0
 fi
 
-# Patch state.md: replace empty session_id with actual value
-# Only patch if session_id is currently empty (safety check)
-CURRENT_SESSION_ID=$(grep "^session_id:" "$STATE_FILE_PATH" 2>/dev/null | sed 's/session_id: *//' || echo "")
+# Commit the session handshake under the same project-wide lease used by setup,
+# cancel, and Stop.  Claiming the signal happens before the state rename; a
+# SIGKILL leaves .claimed for the next PostToolUse event to recover.
+LOOP_DIR=$(dirname "$STATE_FILE_PATH")
+LOCK_SCOPE="$PROJECT_ROOT/.humanize/rlcr"
+rlcr_lock_acquire "$LOCK_SCOPE" || exit 0
 
+if [[ -f "$LOOP_DIR/.cancel-requested" || ! -f "$STATE_FILE_PATH" ]]; then
+    rm -f "$SIGNAL_FILE"
+    rlcr_lock_release
+    exit 0
+fi
+REVIEWER_FENCE_STATUS=0
+rlcr_epoch_writer_fence_locked "$LOOP_DIR" || REVIEWER_FENCE_STATUS=$?
+if [[ "$REVIEWER_FENCE_STATUS" -ne 0 ]]; then
+    rlcr_lock_release
+    exit 4
+fi
+if ! rlcr_lock_heartbeat; then
+    rlcr_lock_release
+    exit 0
+fi
+
+CURRENT_SESSION_ID=$(grep "^session_id:" "$STATE_FILE_PATH" 2>/dev/null | sed 's/session_id: *//' || echo "")
 if [[ -z "$CURRENT_SESSION_ID" ]]; then
-    # Use awk for safe replacement (handles special chars in SESSION_ID: /, &, etc.)
-    TEMP_FILE="${STATE_FILE_PATH}.tmp.$$"
-    awk -v new_id="$SESSION_ID" '{
-        if ($0 ~ /^session_id:$/) {
-            print "session_id: " new_id
-        } else {
-            print
-        }
-    }' "$STATE_FILE_PATH" > "$TEMP_FILE"
+    CLAIMED_SIGNAL="$PROJECT_ROOT/.humanize/.pending-session-id.claimed"
+    if [[ "$SIGNAL_FILE" != "$CLAIMED_SIGNAL" ]]; then
+        mv "$SIGNAL_FILE" "$CLAIMED_SIGNAL"
+        SIGNAL_FILE="$CLAIMED_SIGNAL"
+    fi
+
+    EPOCH=$(rlcr_epoch_read "$LOOP_DIR")
+    NEXT_EPOCH=$((EPOCH + 1))
+    TEMP_FILE="${STATE_FILE_PATH}.session.$$"
+    if ! rlcr_state_prepare "$STATE_FILE_PATH" "$TEMP_FILE" \
+        "session_id=$SESSION_ID" "control_epoch=$NEXT_EPOCH"; then
+        rm -f "$SIGNAL_FILE"
+        rlcr_lock_release
+        exit 0
+    fi
+    rlcr_epoch_write_locked "$LOOP_DIR" "$NEXT_EPOCH"
     mv "$TEMP_FILE" "$STATE_FILE_PATH"
 fi
 
-# Remove signal file (one-shot: session_id is now recorded)
-rm -f "$SIGNAL_FILE"
+# One-shot cleanup after the committing rename.  If this cleanup is killed,
+# the next event observes the already-populated session_id and removes it.
+rm -f "$SIGNAL_FILE" "$PROJECT_ROOT/.humanize/.pending-session-id" \
+      "$PROJECT_ROOT/.humanize/.pending-session-id.claimed"
+rlcr_lock_release
 
 exit 0

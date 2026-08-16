@@ -21,6 +21,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/../hooks/lib/loop-state-write.sh"
+
 SESSION_ID=""
 PROJECT_ROOT=""
 FORCE="false"
@@ -117,8 +120,12 @@ if [[ "$LOOP_STATE" == "FINALIZE_PHASE" && "$FORCE" != "true" ]]; then
     exit 2
 fi
 
-touch "$CANCEL_SIGNAL"
-mv "$ACTIVE_STATE_FILE" "$SESSION_DIR/cancel-state.md"
+if ! rlcr_cancel_transaction "$PROJECT_ROOT/.humanize/rlcr" "$SESSION_DIR" \
+    "$PROJECT_ROOT/.humanize/.pending-session-id"; then
+    echo "NO_ACTIVE_LOOP"
+    echo "Session $SESSION_ID stopped being active before cancellation committed." >&2
+    exit 1
+fi
 
 echo "CANCELLED $SESSION_ID"
 echo "Cancelled session $SESSION_ID; other active sessions in $PROJECT_ROOT are untouched."

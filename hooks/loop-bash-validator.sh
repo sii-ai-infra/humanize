@@ -58,6 +58,18 @@ HOOK_SESSION_ID=$(extract_session_id "$HOOK_INPUT")
 LOOP_BASE_DIR="$PROJECT_ROOT/.humanize/rlcr"
 ACTIVE_LOOP_DIR=$(find_active_loop "$LOOP_BASE_DIR" "$HOOK_SESSION_ID")
 
+# loop_provenance.json selects whether the hook uses the strict convergence
+# consumer.  Deny shell access to the marker itself and destructive operations
+# on its parent directory while a loop is active; otherwise one candidate-side
+# write could downgrade fail-closed behavior to the legacy adapter.
+if [[ -n "$ACTIVE_LOOP_DIR" ]]; then
+    if echo "$COMMAND_LOWER" | grep -qE '(^|[[:space:]"'"'"'/])([^[:space:]"'"'"']*/)?loop_provenance\.json([[:space:]"'"'"'/]|$)' \
+       || echo "$COMMAND_LOWER" | grep -qE '(^|[;&|])[[:space:]]*(sudo[[:space:]]+)?(rm|mv|rmdir|truncate)[[:space:]][^;&|]*\.pipeline([/[:space:]"'"'"']|$)'; then
+        loop_provenance_blocked_message >&2
+        exit 2
+    fi
+fi
+
 # ========================================
 # Methodology Analysis Phase Bash Restriction
 # ========================================
@@ -262,36 +274,29 @@ if [[ -n "$ACTIVE_LOOP_DIR" ]]; then
 # State file is managed by the loop system, not Claude
 # This includes both state.md and finalize-state.md
 # NOTE: Check finalize-state.md FIRST because state\.md pattern also matches finalize-state.md
-# Exception: Allow mv to cancel-state.md when cancel signal file exists
+# There is deliberately no model-shell exception for cancellation.  The
+# validator cannot wrap or fence a command that runs inside the model's Bash
+# process; users must invoke the control-plane cancel script instead.
 #
 # Note: We check TWO patterns for mv/cp:
 # 1. command_modifies_file checks if DESTINATION contains state.md
 # 2. Additional check below catches if SOURCE contains state.md (e.g., mv state.md /tmp/foo)
 
 if command_modifies_file "$COMMAND_LOWER" "methodology-analysis-state\.md"; then
-    # Check for cancel signal file - allow authorized cancel operation
-    if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-        exit 0
-    fi
+    echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
     methodology_analysis_state_file_blocked_message >&2
     exit 2
 fi
 
 if command_modifies_file "$COMMAND_LOWER" "finalize-state\.md"; then
-    # Check for cancel signal file - allow authorized cancel operation
-    if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-        exit 0
-    fi
+    echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
     finalize_state_file_blocked_message >&2
     exit 2
 fi
 
 # Check 1: Destination contains state.md (covers writes, redirects, mv/cp TO state.md)
 if command_modifies_file "$COMMAND_LOWER" "state\.md"; then
-    # Check for cancel signal file - allow authorized cancel operation
-    if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-        exit 0
-    fi
+    echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
     state_file_blocked_message >&2
     exit 2
 fi
@@ -427,29 +432,20 @@ while IFS= read -r SEGMENT; do
 
     # Check for methodology-analysis-state.md as SOURCE first (most specific pattern)
     if echo "$SEGMENT_CLEANED" | grep -qE "$MV_CP_METHODOLOGY_SOURCE_PATTERN"; then
-        # Check for cancel signal file - allow authorized cancel operation
-        if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-            exit 0
-        fi
+        echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
         methodology_analysis_state_file_blocked_message >&2
         exit 2
     fi
 
     # Check for finalize-state.md as SOURCE (more specific than state.md)
     if echo "$SEGMENT_CLEANED" | grep -qE "$MV_CP_FINALIZE_SOURCE_PATTERN"; then
-        # Check for cancel signal file - allow authorized cancel operation
-        if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-            exit 0
-        fi
+        echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
         finalize_state_file_blocked_message >&2
         exit 2
     fi
 
     if echo "$SEGMENT_CLEANED" | grep -qE "$MV_CP_SOURCE_PATTERN"; then
-        # Check for cancel signal file - allow authorized cancel operation
-        if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-            exit 0
-        fi
+        echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
         state_file_blocked_message >&2
         exit 2
     fi
@@ -461,27 +457,19 @@ done <<< "$COMMAND_SEGMENTS"
 if echo "$COMMAND_LOWER" | grep -qE "(^|[[:space:]/])(sh|bash)[[:space:]]+-c[[:space:]]"; then
     # Shell wrapper detected - check if payload contains mv/cp methodology-analysis-state.md (most specific)
     if echo "$COMMAND_LOWER" | grep -qE "(mv|cp)[[:space:]].*methodology-analysis-state\.md"; then
-        if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-            exit 0
-        fi
+        echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
         methodology_analysis_state_file_blocked_message >&2
         exit 2
     fi
     # Shell wrapper detected - check if payload contains mv/cp finalize-state.md (check first, more specific)
     if echo "$COMMAND_LOWER" | grep -qE "(mv|cp)[[:space:]].*finalize-state\.md"; then
-        # Check for cancel signal file - allow authorized cancel operation
-        if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-            exit 0
-        fi
+        echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
         finalize_state_file_blocked_message >&2
         exit 2
     fi
     # Shell wrapper detected - check if payload contains mv/cp state.md
     if echo "$COMMAND_LOWER" | grep -qE "(mv|cp)[[:space:]].*state\.md"; then
-        # Check for cancel signal file - allow authorized cancel operation
-        if is_cancel_authorized "$ACTIVE_LOOP_DIR" "$COMMAND_LOWER"; then
-            exit 0
-        fi
+        echo "Direct state-file cancellation is denied. Use /humanize:cancel-rlcr-loop (or scripts/cancel-rlcr-loop.sh)." >&2
         state_file_blocked_message >&2
         exit 2
     fi

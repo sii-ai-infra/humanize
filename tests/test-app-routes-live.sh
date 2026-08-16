@@ -71,8 +71,12 @@ fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
-# Run the Python driver that does the heavy lifting.
-"$VENV_DIR/bin/python" - "$PLUGIN_ROOT" "$TMP_DIR" <<'PYEOF'
+# Run the Python driver that does the heavy lifting.  Capture its complete log
+# so an infrastructure exception before the Python summary still produces
+# standard aggregate counters instead of disappearing as "failed: 0".
+DRIVER_LOG="$TMP_DIR/live-routes-driver.log"
+set +e
+"$VENV_DIR/bin/python" - "$PLUGIN_ROOT" "$TMP_DIR" 2>&1 <<'PYEOF' | tee "$DRIVER_LOG"
 import os
 import sys
 import json
@@ -1213,3 +1217,20 @@ if FAIL > 0:
     sys.exit(1)
 print("\033[0;32mAll live route tests passed!\033[0m")
 PYEOF
+DRIVER_STATUS=${PIPESTATUS[0]}
+set -e
+
+if [[ "$DRIVER_STATUS" -ne 0 ]]; then
+    DRIVER_STRIPPED=$(sed $'s/\033\\[[0-9;]*m//g' "$DRIVER_LOG")
+    if ! grep -qE '^Failed:[[:space:]]*[0-9]+' <<< "$DRIVER_STRIPPED"; then
+        DRIVER_PASSED=$(grep -cE '^PASS:' <<< "$DRIVER_STRIPPED" || true)
+        if grep -q 'inotify watch limit reached' <<< "$DRIVER_STRIPPED"; then
+            echo "ENVIRONMENT FAILURE: inotify watch capacity exhausted; live route suite did not complete."
+        else
+            echo "INFRASTRUCTURE FAILURE: live route test driver exited before its summary."
+        fi
+        printf 'Passed: %d\n' "$DRIVER_PASSED"
+        printf 'Failed: 1\n'
+    fi
+    exit "$DRIVER_STATUS"
+fi

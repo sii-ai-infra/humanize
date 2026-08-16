@@ -74,10 +74,10 @@ run_bash_validator() {
 }
 
 # ========================================
-# POSITIVE TEST 1: mv allowed with signal file
+# DENY TEST 1: historical signal no longer authorizes model-shell mv
 # ========================================
 
-echo "POSITIVE TEST 1: mv state.md to cancel-state.md allowed when signal file exists"
+echo "DENY TEST 1: mv state.md remains blocked when signal file exists"
 setup_test_loop "positive-1"
 touch "$LOOP_DIR/.cancel-requested"
 COMMAND="mv ${LOOP_DIR}/state.md ${LOOP_DIR}/cancel-state.md"
@@ -87,17 +87,17 @@ OUTPUT=$(run_bash_validator "$COMMAND")
 EXIT_CODE=$?
 set -e
 
-if [[ $EXIT_CODE -eq 0 ]]; then
-    pass "mv state.md to cancel-state.md allowed with signal file"
+if [[ $EXIT_CODE -eq 2 ]]; then
+    pass "mv state.md to cancel-state.md denied despite signal file"
 else
-    fail "mv allowed with signal" "exit 0" "exit $EXIT_CODE: $OUTPUT"
+    fail "mv denied despite signal" "exit 2" "exit $EXIT_CODE: $OUTPUT"
 fi
 
 # ========================================
-# POSITIVE TEST 2: mv allowed with different path format
+# DENY TEST 2: alternate path syntax remains denied
 # ========================================
 
-echo "POSITIVE TEST 2: mv allowed with relative-style path"
+echo "DENY TEST 2: mv denied with relative-style path"
 setup_test_loop "positive-2"
 touch "$LOOP_DIR/.cancel-requested"
 # Use a command with ./ prefix to test slightly different path format
@@ -108,10 +108,10 @@ OUTPUT=$(run_bash_validator "$COMMAND")
 EXIT_CODE=$?
 set -e
 
-if [[ $EXIT_CODE -eq 0 ]]; then
-    pass "mv state.md allowed with ./ path format"
+if [[ $EXIT_CODE -eq 2 ]]; then
+    pass "mv state.md denied with ./ path format"
 else
-    fail "mv allowed with ./ path" "exit 0" "exit $EXIT_CODE: $OUTPUT"
+    fail "mv denied with ./ path" "exit 2" "exit $EXIT_CODE: $OUTPUT"
 fi
 
 # ========================================
@@ -357,12 +357,12 @@ else
 fi
 
 # ========================================
-# POSITIVE TEST 3: mv with single-quoted paths allowed
+# DENY TEST 3: quoting does not restore the removed whitelist
 # ========================================
 # Test that paths with quotes work correctly
 # Note: We use single quotes here since double quotes break JSON parsing in the test harness
 
-echo "POSITIVE TEST 3: mv with single-quoted paths allowed with signal"
+echo "DENY TEST 3: mv with single-quoted paths denied with signal"
 setup_test_loop "positive-3"
 touch "$LOOP_DIR/.cancel-requested"
 # Use single quotes around paths to test quoted path handling
@@ -373,10 +373,10 @@ OUTPUT=$(run_bash_validator "$COMMAND")
 EXIT_CODE=$?
 set -e
 
-if [[ $EXIT_CODE -eq 0 ]]; then
-    pass "mv with single-quoted paths allowed with signal file"
+if [[ $EXIT_CODE -eq 2 ]]; then
+    pass "mv with single-quoted paths denied with signal file"
 else
-    fail "mv with quoted paths" "exit 0" "exit $EXIT_CODE: $OUTPUT"
+    fail "mv with quoted paths" "exit 2" "exit $EXIT_CODE: $OUTPUT"
 fi
 
 # ========================================
@@ -462,12 +462,12 @@ else
 fi
 
 # ========================================
-# POSITIVE TEST 5: Literal LOOP_DIR through validator (documented format)
+# DENY TEST 5: Literal LOOP_DIR cannot bypass the cancel script
 # ========================================
 # Tests the full validator flow with literal ${LOOP_DIR} variable syntax
 # This verifies the documented cancel command format works end-to-end
 
-echo "POSITIVE TEST 5: Literal LOOP_DIR through validator with signal"
+echo "DENY TEST 5: Literal LOOP_DIR through validator with signal"
 setup_test_loop "positive-5"
 touch "$LOOP_DIR/.cancel-requested"
 # Pass literal command with ${loop_dir} (lowercased for command_lower matching)
@@ -479,10 +479,10 @@ OUTPUT=$(run_bash_validator "$COMMAND")
 EXIT_CODE=$?
 set -e
 
-if [[ $EXIT_CODE -eq 0 ]]; then
-    pass "Literal LOOP_DIR through validator allowed"
+if [[ $EXIT_CODE -eq 2 ]]; then
+    pass "Literal LOOP_DIR through validator denied"
 else
-    fail "LOOP_DIR through validator" "exit 0" "exit $EXIT_CODE: $OUTPUT"
+    fail "LOOP_DIR through validator" "exit 2" "exit $EXIT_CODE: $OUTPUT"
 fi
 
 # ========================================

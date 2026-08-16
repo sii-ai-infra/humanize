@@ -417,22 +417,23 @@ start_branch: main
 ---
 EOF
 
-# Zombie-loop protection: cancel only checks newest dir, which is completed.
-# Stale older loop should NOT be revived and cancelled.
+# F-6: explicit user cancellation searches past newer terminal sessions and
+# cancels the newest loop that is actually active.
 cd "$TEST_DIR/project"
 CANCEL_OUTPUT=$(CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$CANCEL_SCRIPT" 2>&1) || true
 
-if echo "$CANCEL_OUTPUT" | grep -q "NO_LOOP"; then
-    pass "cancel script reports no active loop when newest dir is completed"
+if echo "$CANCEL_OUTPUT" | grep -q "CANCELLED"; then
+    pass "cancel script finds active older loop when newest dir is completed"
 else
-    fail "cancel script reports no active loop when newest dir is completed" "NO_LOOP in output" "$CANCEL_OUTPUT"
+    fail "cancel script finds active older loop when newest dir is completed" "CANCELLED in output" "$CANCEL_OUTPUT"
 fi
 
-# Verify the older stale loop was NOT touched
-if [[ -f "$TEST_DIR/project/.humanize/rlcr/2026-01-01_00-00-00/state.md" ]]; then
-    pass "cancel script does not revive stale older loop"
+# Verify the active loop was terminally cancelled rather than revived.
+if [[ -f "$TEST_DIR/project/.humanize/rlcr/2026-01-01_00-00-00/cancel-state.md" ]] \
+   && [[ ! -f "$TEST_DIR/project/.humanize/rlcr/2026-01-01_00-00-00/state.md" ]]; then
+    pass "cancel script terminally cancels the older active loop"
 else
-    fail "cancel script does not revive stale older loop" "state.md still present" "not found"
+    fail "cancel script terminally cancels the older active loop" "cancel-state.md only" "unexpected state files"
 fi
 
 # ========================================
@@ -528,7 +529,7 @@ else
 fi
 
 # ========================================
-# Test: PostToolUse hook handles special characters in session_id
+# Test: PostToolUse hook rejects schema-unsafe session_id characters
 # ========================================
 
 setup_test_dir
@@ -556,21 +557,21 @@ if [[ -f "$POST_HOOK" ]]; then
     echo "$MOCK_JSON" | CLAUDE_PROJECT_DIR="$TEST_DIR/project" bash "$POST_HOOK" > /dev/null 2>&1 || true
 
     RECORDED_ID=$(grep "^session_id:" "$TEST_DIR/project/.humanize/rlcr/2026-01-01_00-00-00/state.md" | sed 's/session_id: *//')
-    if [[ "$RECORDED_ID" == "abc/def&ghi.jkl" ]]; then
-        pass "PostToolUse hook handles special characters in session_id"
+    if [[ -z "$RECORDED_ID" ]]; then
+        pass "PostToolUse hook rejects schema-unsafe session_id"
     else
-        fail "PostToolUse hook handles special characters in session_id" "abc/def&ghi.jkl" "$RECORDED_ID"
+        fail "PostToolUse hook rejects schema-unsafe session_id" "empty session_id" "$RECORDED_ID"
     fi
 
     # Signal file should be removed
     if [[ ! -f "$TEST_DIR/project/.humanize/.pending-session-id" ]]; then
-        pass "signal file removed after special-char session_id recording"
+        pass "signal file removed after unsafe session_id rejection"
     else
-        fail "signal file removed after special-char session_id recording" "removed" "still exists"
+        fail "signal file removed after unsafe session_id rejection" "removed" "still exists"
     fi
 else
-    skip "PostToolUse hook handles special characters in session_id" "hook file not found"
-    skip "signal file removed after special-char session_id recording" "hook file not found"
+    skip "PostToolUse hook rejects schema-unsafe session_id" "hook file not found"
+    skip "signal file removed after unsafe session_id rejection" "hook file not found"
 fi
 
 # ========================================

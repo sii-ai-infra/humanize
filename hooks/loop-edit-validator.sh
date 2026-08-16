@@ -68,6 +68,13 @@ LOOP_BASE_DIR="${LOOP_BASE_DIR:-$PROJECT_ROOT/.humanize/rlcr}"
 # their sanitization is enforced by the analysis prompt.
 _MA_LOOP_DIR="${LOOP_DIR:-$(find_active_loop "$LOOP_BASE_DIR" "$HOOK_SESSION_ID")}"
 
+# The KOP provenance marker selects strict fail-closed convergence handling.
+# It is outside .humanize/, so protect it before the ordinary path early exit.
+if [[ -n "$_MA_LOOP_DIR" ]] && is_loop_provenance_path "$FILE_PATH" "$PROJECT_ROOT"; then
+    loop_provenance_blocked_message >&2
+    exit 2
+fi
+
 if [[ -n "$_MA_LOOP_DIR" ]] && [[ -f "$_MA_LOOP_DIR/methodology-analysis-state.md" ]]; then
     # If realpath fails (file doesn't exist yet on BSD/macOS), resolve parent dir
     _ma_real_path=$(realpath "$FILE_PATH" 2>/dev/null || echo "")

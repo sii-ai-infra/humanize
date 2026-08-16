@@ -118,6 +118,8 @@ TEST_SUITES=(
     "test-frontend-migration.sh"
     "test-rlcr-sources.sh"
     "test-style-compliance.sh"
+    "test-w4a5-control-plane.sh"
+    "test-w4b-reducer.sh"
     # Robustness tests
     "robustness/test-state-file-robustness.sh"
     "robustness/test-session-robustness.sh"
@@ -255,6 +257,7 @@ collect_suite_result() {
     local failed
     local line
     local zsh_label
+    local inferred_failure=""
 
     exit_code=$(cat "$exit_file" 2>/dev/null || echo "1")
     output=$(cat "$out_file" 2>/dev/null || echo "")
@@ -266,12 +269,19 @@ collect_suite_result() {
     passed=$(echo "$output_stripped" | grep -oE 'Passed:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | tail -1 || echo "0")
     failed=$(echo "$output_stripped" | grep -oE 'Failed:[[:space:]]*[0-9]+' | grep -oE '[0-9]+$' | tail -1 || echo "0")
 
+    # A suite that crashes before printing its counters is still one visible
+    # aggregate failure.  Never let a nonzero process appear as "failed: 0".
+    if [[ "$exit_code" -ne 0 && "$failed" -eq 0 ]]; then
+        failed=1
+        inferred_failure=", inferred from nonzero exit (no Failed counter)"
+    fi
+
     TOTAL_PASSED=$((TOTAL_PASSED + passed))
     TOTAL_FAILED=$((TOTAL_FAILED + failed))
 
     if [[ $exit_code -ne 0 ]] || [[ "$failed" -gt 0 ]]; then
         FAILED_SUITES+=("$suite")
-        line=$(echo -e "${RED}FAILED${NC}: $suite (exit code: $exit_code, failed: $failed, ${elapsed_display})")
+        line=$(echo -e "${RED}FAILED${NC}: $suite (exit code: $exit_code, failed: $failed${inferred_failure}, ${elapsed_display})")
         printf '%d\t%s\n' "$elapsed_ms" "$line" >> "$SORT_FILE"
         # Preserve the full suite log so CI surfaces the exact failing assertion.
         printf '%s\n' "$output" > "$OUTPUT_DIR/${safe_name}.detail"
