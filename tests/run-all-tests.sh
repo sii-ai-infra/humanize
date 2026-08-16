@@ -120,6 +120,7 @@ TEST_SUITES=(
     "test-style-compliance.sh"
     "test-w4a5-control-plane.sh"
     "test-w4b-reducer.sh"
+    "test-rlcr-candidate-fingerprint.sh"
     # Robustness tests
     "robustness/test-state-file-robustness.sh"
     "robustness/test-session-robustness.sh"

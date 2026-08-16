@@ -133,14 +133,23 @@ rlcr_legacy_convergence() {
     RLCR_CONVERGENCE_REASON=legacy_compatibility
 }
 
+rlcr_candidate_manifest() {
+    local project_root="$1"
+    local manifest_writer="$RLCR_CONTROL_PLUGIN_ROOT/scripts/rlcr-candidate-manifest.py"
+    (
+        set -o pipefail
+        git -C "$project_root" ls-files -z --cached --others --exclude-standard -- solution \
+            | "${PYTHON:-python3}" "$manifest_writer" "$project_root"
+    )
+}
+
 rlcr_candidate_fingerprint() {
     local project_root="$1"
     if git -C "$project_root" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        {
-            git -C "$project_root" rev-parse --verify HEAD 2>/dev/null || printf 'no-head\n'
-            git -C "$project_root" rev-parse --verify HEAD^{tree} 2>/dev/null || printf 'no-tree\n'
-            git -C "$project_root" status --porcelain=v1 --untracked-files=all 2>/dev/null || true
-        } | rlcr_sha256_stream
+        (
+            set -o pipefail
+            rlcr_candidate_manifest "$project_root" | rlcr_sha256_stream
+        )
     else
         printf 'rlcr-no-git-candidate\n' | rlcr_sha256_stream
     fi
