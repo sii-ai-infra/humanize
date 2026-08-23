@@ -283,7 +283,7 @@ EOF
 # geometric mean of per-case (baseline_perf_us / elapsed_us).  It is a ratio, so
 # it is comparable across rounds and immune to the score's aggregation quirks.
 loop_speedups() {
-    local dir="$PROJECT_ROOT/reports" f start sf
+    local dir="$PROJECT_ROOT/reports" f start sf sw
     [[ -d "$dir" ]] || return 0
     sf=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md "$LOOP_DIR"/finalize-state.md \
          "$LOOP_DIR"/cancel-state.md 2>/dev/null | head -1)
@@ -293,6 +293,16 @@ loop_speedups() {
                 | xargs -r -I{} date -u -d {} +%s 2>/dev/null) || start=0
     fi
     [[ -n "$start" ]] || start=0
+    # 结构切换边界：最近一次归档到 candidates/ 的时刻。切换后只统计新结构的读数，
+    # 让新方案至少拿到 3 次正式评测的观察期——否则窗口会跨界混入旧结构的成绩，
+    # 刚换就被判停滞，催着再换，形成反复横跳。
+    if [[ -d "$PROJECT_ROOT/candidates" ]]; then
+        sw=$(find "$PROJECT_ROOT/candidates" -mindepth 1 -maxdepth 1 -type d \
+             -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)
+        if [[ -n "$sw" ]] && [[ "$sw" =~ ^[0-9]+$ ]] && [[ "$sw" -gt "$start" ]]; then
+            start="$sw"
+        fi
+    fi
     for f in $(ls -t "$dir"/cann_final_eval_*.json 2>/dev/null | head -20); do
         [[ $(stat -c %Y "$f" 2>/dev/null || echo 0) -ge "$start" ]] || continue
         python3 - "$f" 2>/dev/null <<'PYEOF'
@@ -335,7 +345,8 @@ print(f"{len(v)} {ref:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
 ## ⛔ 当前结构已经不再产出：该换结构了
 
 **最近 3 次**正式评测的几何平均加速比：**$ref** → **$latest**（净变化 **$gain%**）。
-本循环共 $n 次正式评测，最好 $best——**早期涨过不算数，看的是近三轮**。
+**当前结构**下共 $n 次正式评测，最好 $best——早期涨过不算数，看的是近三轮。
+（读数只从最近一次结构切换起算；新结构不满 3 次正式评测时本提示不会出现。）
 按变体协议，"连续多轮提升不足 5%"就是
 **换结构**的触发条件——继续在同一结构上调参不会改变量级。
 
