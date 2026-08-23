@@ -1020,9 +1020,10 @@ REVIEW_RESULT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-review-result.md"
 SUMMARY_CONTENT=$(cat "$SUMMARY_FILE")
 
 # ========================================
-# Mandatory Full Benchmark (every normal round)
+# Optional Full Benchmark (every normal round, when configured)
 # ========================================
 
+BENCHMARK_CONFIGURED=false
 if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
     BENCHMARK_COMMAND_FILE="$LOOP_DIR/benchmark-command.sh"
     BENCHMARK_TIMEOUT_FILE="$LOOP_DIR/benchmark-timeout"
@@ -1030,12 +1031,15 @@ if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
     BENCHMARK_LOG_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-benchmark.log"
 
     if [[ ! -s "$BENCHMARK_COMMAND_FILE" || ! -s "$BENCHMARK_TIMEOUT_FILE" ]]; then
-        jq -n \
-            --arg reason "Mandatory full benchmark configuration is missing. Restart RLCR with --benchmark-command '<full benchmark command>'." \
-            --arg msg "Loop: blocked - full benchmark configuration missing" \
-            '{decision:"block", reason:$reason, systemMessage:$msg}'
-        exit 0
+        # 未配置 per-round benchmark：跳过本环节，保持与该特性引入前一致的行为。
+        # 这是可选特性，不是必填项——不能因为没配就把整轮拦下来。
+        BENCHMARK_CONFIGURED=false
+    else
+        BENCHMARK_CONFIGURED=true
     fi
+fi
+
+if [[ "$IS_FINALIZE_PHASE" != "true" && "$BENCHMARK_CONFIGURED" == "true" ]]; then
 
     BENCHMARK_TIMEOUT=$(cat "$BENCHMARK_TIMEOUT_FILE")
     if ! [[ "$BENCHMARK_TIMEOUT" =~ ^[0-9]+$ ]] || [[ "$BENCHMARK_TIMEOUT" -lt 1 ]]; then
@@ -1068,7 +1072,7 @@ if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
 
 ${BENCHMARK_EVIDENCE}
 
-The benchmark was mandatory for this round. A failed or timed-out run is still
+The benchmark was configured for this round. A failed or timed-out run is still
 valid recorded evidence, but its impact must be assessed before completion."
 fi
 

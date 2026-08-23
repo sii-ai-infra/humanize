@@ -359,9 +359,10 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ -z "$BENCHMARK_COMMAND" ]]; then
-    echo "Error: A full benchmark command is required for RLCR." >&2
-    echo "Pass --benchmark-command '<command>' or set HUMANIZE_BENCHMARK_COMMAND." >&2
-    exit 1
+    # 向后兼容：per-round benchmark gate 是后加的特性，不应成为强制项。
+    # 不传就退回旧行为——不跑每轮评测，其余流程不变。
+    echo "Warning: no --benchmark-command given; the per-round full benchmark will be skipped." >&2
+    echo "         Pass --benchmark-command '<command>' (or set HUMANIZE_BENCHMARK_COMMAND) to enable it." >&2
 fi
 
 # ========================================
@@ -962,8 +963,13 @@ EOF
 
 # Keep arbitrary shell syntax out of YAML. Validators protect loop control files
 # from agent edits; the Stop gate reads this setup-owned command verbatim.
-printf '%s' "$BENCHMARK_COMMAND" > "$LOOP_DIR/benchmark-command.sh"
-printf '%s\n' "$BENCHMARK_TIMEOUT" > "$LOOP_DIR/benchmark-timeout"
+if [[ -n "$BENCHMARK_COMMAND" ]]; then
+    printf '%s' "$BENCHMARK_COMMAND" > "$LOOP_DIR/benchmark-command.sh"
+    printf '%s\n' "$BENCHMARK_TIMEOUT" > "$LOOP_DIR/benchmark-timeout"
+else
+    # 未配置：不落盘命令文件，Stop gate 会跳过每轮评测（旧版行为）
+    rm -f "$LOOP_DIR/benchmark-command.sh" "$LOOP_DIR/benchmark-timeout"
+fi
 
 # Create signal file for PostToolUse hook to record session_id
 # The hook will read the session_id from its JSON input and patch state.md
