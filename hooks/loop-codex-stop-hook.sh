@@ -1953,6 +1953,70 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
 fi
 
 # Handle COMPLETE - enter Review Phase or Finalize Phase
+# ========================================
+# Completion Cross-Check (guard against a premature terminator)
+# ========================================
+# "COMPLETE" is the word a reviewer naturally writes to close a document, and the
+# hook reads it as "terminate the loop".  Observed twice on the same task: the
+# review body prescribed concrete remaining work ("Implement <candidate> as the
+# first candidate"), yet the last line said COMPLETE and the loop ended at round 0
+# with the solution byte-for-byte unchanged.
+#
+# Two cross-checks, both best-effort — when a signal cannot be read the terminator
+# is honoured unchanged, so nothing here can make a loop un-stoppable:
+#
+#   1. The review's own `ACs: N/M addressed` line with N < M — the report
+#      contradicts itself.  (Deliberately NOT compared against a count parsed from
+#      the plan: across seven plans the acceptance sections use different headings,
+#      bullet styles and groupings, and the reviewer's denominator legitimately
+#      refers to whatever it treats as current scope.  Any such comparison
+#      would fire for the wrong reason.)
+#   2. No change under solution/ since the loop's base commit.  RLCR exists to
+#      change the kernel; declaring every goal met without touching it is not a
+#      completion regardless of how the criteria are counted.  This one is read
+#      from git, so plan wording cannot affect it.
+#
+# Repeated blocks are capped at 2 so a stubborn disagreement cannot livelock.
+completion_cross_check() {
+    [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]] || return 0
+    [[ "$REVIEW_STARTED" == "true" ]] && return 0
+
+    local blocks_file="$LOOP_DIR/.completion-crosscheck-blocks"
+    local prior=0
+    [[ -s "$blocks_file" ]] && prior=$(tr -dc '0-9' < "$blocks_file" 2>/dev/null)
+    [[ -z "$prior" ]] && prior=0
+    if [[ "$prior" -ge 2 ]]; then
+        echo "completion cross-check: already blocked $prior times; honouring terminator." >&2
+        return 0
+    fi
+
+    local reason="" acs n m changed
+    acs=$(printf '%s' "$REVIEW_CONTENT" | grep -oE 'ACs:[[:space:]]*[0-9]+/[0-9]+' | head -1)
+    if [[ -n "$acs" ]]; then
+        n=$(printf '%s' "$acs" | grep -oE '[0-9]+/' | tr -d '/')
+        m=$(printf '%s' "$acs" | grep -oE '/[0-9]+' | tr -d '/')
+        if [[ -n "$n" && -n "$m" && "$n" -lt "$m" ]]; then
+            reason="The review says \`$acs\` — $((m - n)) acceptance criteria are still open."
+        fi
+    fi
+    if [[ -z "$reason" && -n "$BASE_COMMIT" ]] && command -v git &>/dev/null; then
+        changed=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" diff --name-only \
+                  "$BASE_COMMIT" HEAD -- solution 2>/dev/null | head -1)
+        if [[ -z "$changed" ]]; then
+            reason="Nothing under \`solution/\` has changed since the loop's base commit ($BASE_COMMIT). RLCR exists to change the kernel; a run with no implementation change is not complete."
+        fi
+    fi
+    [[ -z "$reason" ]] && return 0
+
+    echo $((prior + 1)) > "$blocks_file"
+    jq -n \
+        --arg reason "Completion cross-check blocked the terminator. $reason Continue the work, or restate the completion claim with this discrepancy resolved." \
+        --arg msg "Loop: blocked - completion cross-check" \
+        '{decision:"block", reason:$reason, systemMessage:$msg}'
+    exit 0
+}
+completion_cross_check
+
 if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
     # In review phase, COMPLETE signal is ignored - only absence of [P0-9] triggers finalize
     if [[ "$REVIEW_STARTED" == "true" ]]; then
