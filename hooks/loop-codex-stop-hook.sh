@@ -311,20 +311,21 @@ PYEOF
 }
 
 append_structural_stall_note() {
-    local file="$1" sps verdict n best latest gain
+    local file="$1" sps verdict n best latest gain ref
     sps=$(loop_speedups)                     # 最新在前
     [[ $(printf '%s\n' "$sps" | grep -c '[0-9]') -ge 3 ]] || return 0
     verdict=$(printf '%s\n' "$sps" | python3 -c '
 import sys
 v=[float(x) for x in sys.stdin.read().split() if x]
 if len(v) < 3: raise SystemExit(1)
-latest, oldest, best = v[0], v[-1], max(v)
-if oldest <= 0: raise SystemExit(1)
-gain = (latest - oldest) / oldest          # 相对最早一次的净提升
-if gain >= 0.05: raise SystemExit(1)       # 还在涨，不算停滞
-print(f"{len(v)} {oldest:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
+win = v[:3]                                # 滑动窗口：最近 3 次（最新在前）
+if any(x <= 0 for x in win): raise SystemExit(1)
+latest, ref, best = v[0], win[-1], max(v)
+gain = (latest - ref) / ref                # 近 3 次的净提升
+if gain >= 0.05: raise SystemExit(1)       # 近窗仍在涨，不算停滞
+print(f"{len(v)} {ref:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
 ') || return 0
-    read -r n oldest latest best gain <<< "$verdict"
+    read -r n ref latest best gain <<< "$verdict"
     local branch=""
     if [[ -f "$PROJECT_ROOT/docs/headroom.md" ]]; then
         branch=$(grep -m1 '^> 优先修' "$PROJECT_ROOT/docs/headroom.md" 2>/dev/null | cut -c1-200)
@@ -333,8 +334,9 @@ print(f"{len(v)} {oldest:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
 
 ## ⛔ 当前结构已经不再产出：该换结构了
 
-本循环 **$n** 次正式评测的几何平均加速比：最早 **$oldest** → 最新 **$latest**
-（净变化 **$gain%**，本循环最好 $best）。按变体协议，"连续多轮提升不足 5%"就是
+**最近 3 次**正式评测的几何平均加速比：**$ref** → **$latest**（净变化 **$gain%**）。
+本循环共 $n 次正式评测，最好 $best——**早期涨过不算数，看的是近三轮**。
+按变体协议，"连续多轮提升不足 5%"就是
 **换结构**的触发条件——继续在同一结构上调参不会改变量级。
 
 本轮的动作顺序是固定的：
