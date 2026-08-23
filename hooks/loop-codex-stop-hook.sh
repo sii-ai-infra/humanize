@@ -181,6 +181,93 @@ print(f"{min(v):.2f} {max(v):.2f} {spread:.2f} {net:+.2f}")
 EOF
 }
 
+# ========================================
+# Regression-Without-Rollback Detector
+# ========================================
+# The fourth failure mode seen tonight: a formal measurement falsifies a change,
+# and nothing rolls it back.  Three operators at once —
+#     -5.64 分 (nonfinite-gradient fix), unrolled for 2 further rounds
+#     -4.93 分 (float tanh path), still in place
+#     -0.27 分 (NaN semantics fix), unrolled for 3 further rounds
+# Each plan's variant protocol lists "预期收益被实测证伪" as a rollback trigger, but
+# nothing checks it, so the loop keeps stacking work on a version already known to
+# be worse.
+#
+# Machine-readable: compare the newest formal score against the best one this loop
+# has produced.  Only reports written after the loop started are considered, so a
+# previous loop's numbers cannot trigger it.  The threshold is the larger of the
+# observed spread and 1.0 point, so ordinary run-to-run wobble never fires it.
+loop_scores_with_time() {
+    local dir="$PROJECT_ROOT/reports" f start
+    [[ -d "$dir" ]] || return 0
+    # 循环起点用 state 里的 started_at（ISO8601 UTC）——LOOP_DIR 的 mtime 每轮都在变，
+    # 拿它当起点会把本循环自己产出的报告几乎全部滤掉。
+    local sf
+    sf=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md "$LOOP_DIR"/finalize-state.md \
+         "$LOOP_DIR"/cancel-state.md 2>/dev/null | head -1)
+    start=0
+    if [[ -n "$sf" ]]; then
+        start=$(grep -m1 '^started_at:' "$sf" 2>/dev/null | awk '{print $2}' \
+                | xargs -r -I{} date -u -d {} +%s 2>/dev/null) || start=0
+    fi
+    [[ -n "$start" ]] || start=0
+    for f in $(ls -t "$dir"/cann_final_eval_*.json 2>/dev/null | head -40); do
+        [[ $(stat -c %Y "$f" 2>/dev/null || echo 0) -ge "$start" ]] || continue
+        python3 - "$f" 2>/dev/null <<'PYEOF'
+import json,sys
+try: d=json.load(open(sys.argv[1]))
+except Exception: raise SystemExit
+for op in d.get("operators") or []:
+    cs=[c for c in (op.get("cases") or []) if c.get("status")=="success" and c.get("elapsed_us")]
+    if cs and op.get("score") is not None:
+        print(f"{op['score']:.4f}"); break
+PYEOF
+    done
+}
+
+append_regression_note() {
+    local file="$1" scores verdict best latest drop thr
+    scores=$(loop_scores_with_time)          # 最新在前
+    [[ $(printf '%s\n' "$scores" | grep -c '[0-9]') -ge 3 ]] || return 0
+    verdict=$(printf '%s\n' "$scores" | python3 -c '
+import sys
+v=[float(x) for x in sys.stdin.read().split() if x]
+if len(v) < 3: raise SystemExit(1)
+latest, best = v[0], max(v)
+spread = max(v) - min(v)
+thr = max(spread * 0.5, 1.0)          # 半个观测跨度，且至少 1 分
+if best - latest < thr: raise SystemExit(1)
+print(f"{best:.2f} {latest:.2f} {best-latest:.2f} {thr:.2f}")
+') || return 0
+    read -r best latest drop thr <<< "$verdict"
+    local recent
+    recent=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" log --format='%h %s' -3 \
+             -- solution 2>/dev/null | sed 's/^/  - /')
+    cat >> "$file" << EOF
+
+## ⛔ 已被实测证伪的改动仍未回滚
+
+本次循环的最好成绩是 **$best**，最新一次正式评测是 **$latest**，**跌了 $drop 分**
+（判定阈值 $thr 分，已排除重复测量的正常波动）。
+
+按变体协议，"设计文档中的预期收益被实测证伪"就是回滚触发条件。**在已经变差的版本上
+继续叠加改动，只会让后面每一次测量都建立在一个坏基线上**，也无法再区分新改动的好坏。
+
+最近改动 \`solution/\` 的提交：
+$recent
+
+本轮第一件事：**回到取得 $best 分的那个版本**。做法二选一——
+1. \`git revert\` 掉造成回退的那次提交；或
+2. 先 \`cp -r solution candidates/<描述性名字>\` 归档当前实现，再
+   \`git checkout <好版本> -- solution\`。
+
+归档时在 \`docs/variants.md\` 记一行：结构、实测分数、放弃原因。**归档不是丢弃**——
+若其中某条思路本身合理（只是实现拖慢了主路径），后续可以按正确修法重做。
+
+回滚并复测确认回到 $best 附近之后，再决定是修正当前方向还是换结构。
+EOF
+}
+
 append_idle_round_note() {
     local file="$1" streak="$2"
     [[ "$streak" -ge 2 ]] || return 0
@@ -1808,6 +1895,7 @@ EOF
     fi
     append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
     append_noise_band_note "$next_prompt_file"
+    append_regression_note "$next_prompt_file"
     append_task_tag_routing_note "$next_prompt_file"
 
     jq -n \
