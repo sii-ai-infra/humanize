@@ -63,6 +63,67 @@ HOOK_SESSION_ID=$(extract_session_id "$HOOK_INPUT")
 
 LOOP_DIR=$(find_active_loop "$LOOP_BASE_DIR" "$HOOK_SESSION_ID" true)
 
+# ========================================
+# Idle-Round Detector (no implementation output)
+# ========================================
+# A round's only valid outputs are a real change under solution/ or a fresh formal
+# measurement.  Design docs, feasibility maths and evidence-only rejections are
+# means, not results.  Observed on the three highest-headroom operators: three
+# consecutive rounds each ending with "no change to solution/ this round", all
+# while the recoverable score sat untouched.
+#
+# Identity of a round's code state = the git tree object of solution/ plus whether
+# anything is dirty underneath it (an uncommitted edit still counts as output).
+# Two consecutive rounds with an identical state mean the loop is circling.
+#
+# This does NOT block or terminate: it appends an escalating instruction to the
+# next round's prompt, so the loop's own machinery stays in charge.
+solution_state_id() {
+    local tree dirty
+    tree=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" rev-parse "HEAD:solution" 2>/dev/null) || tree="none"
+    dirty=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" status --porcelain -- solution 2>/dev/null | md5sum | cut -c1-8)
+    printf '%s-%s' "$tree" "$dirty"
+}
+
+idle_round_streak() {
+    local log="$LOOP_DIR/.solution-state-log" now prev streak=0
+    now=$(solution_state_id)
+    [[ "$now" == "none-"* ]] && { printf '0'; return; }
+    printf '%s\n' "$now" >> "$log"
+    # 统计末尾有多少条与最后一条相同
+    while read -r prev; do
+        if [[ "$prev" == "$now" ]]; then streak=$((streak + 1)); else streak=0; fi
+    done < "$log"
+    printf '%s' "$((streak - 1))"   # 减去本条自身
+}
+
+append_idle_round_note() {
+    local file="$1" streak="$2"
+    [[ "$streak" -ge 2 ]] || return 0
+    local hard=""
+    if [[ "$streak" -ge 4 ]]; then
+        hard="
+
+已连续 $streak 轮零产出。若该方案确实实现不出来（编译不过 / 精度过不了），把失败点写进
+\`docs/variants.md\`，从 \`candidates/\` 里最好的归档回滚，换一个**结构上不同**的方案——
+仍然不许再连着交纯设计。"
+    fi
+    cat >> "$file" << EOF
+
+## ⛔ 产出节律：本轮必须落地代码
+
+已连续 **$streak** 轮没有对 \`solution/\` 产生任何改动（git 树对象与工作区状态均未变）。
+
+一轮的合格产出**只有两种**：(a) \`solution/\` 有真实代码改动并至少跑过一次 quick；
+(b) 一次正式评测的新成绩。设计文档、可行性推算、KernelWiki 调研、证据式否决都**不算**
+——它们是手段，不是结果。
+
+**本轮禁止再交设计或否决**：把当前 \`docs/kernel_design_*.md\` 里最优的那个方案实现出来，
+并跑一次评测。哪怕它只做到部分 case、哪怕预期收益不高——实测数据比纸面推算值钱，
+跑出来才知道推算错在哪。$hard
+EOF
+}
+
 # If no active loop (or session_id mismatch), allow exit
 if [[ -z "$LOOP_DIR" ]]; then
     exit 0
@@ -1661,6 +1722,7 @@ Before implementing each fix task, you MUST:
 Reference: @$BITLESSON_FILE
 EOF
     fi
+    append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
     append_task_tag_routing_note "$next_prompt_file"
 
     jq -n \
@@ -1953,6 +2015,7 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
 fi
 
 # Handle COMPLETE - enter Review Phase or Finalize Phase
+
 # ========================================
 # Completion Cross-Check (guard against a premature terminator)
 # ========================================
