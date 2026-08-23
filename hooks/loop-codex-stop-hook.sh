@@ -268,6 +268,91 @@ $recent
 EOF
 }
 
+# ========================================
+# Structural-Stall Detector (current structure has stopped paying)
+# ========================================
+# The variant protocol says to archive the current implementation and try a
+# structurally different one once the present structure stops yielding.  Every
+# plan mentions that switching is allowed and that candidates/ is where archives
+# go, but across seven plans only one carried a trigger condition, and that one
+# hung off an acceptance criterion the operator was nowhere near reaching — so it
+# could never fire.  The result: five rounds on one operator with the geometric
+# speedup going 0.0023 -> 0.0023 -> 0.0011 -> 0.0011 -> 0.0020, and no switch.
+#
+# The trigger is measurable from the reports the loop already produces: the
+# geometric mean of per-case (baseline_perf_us / elapsed_us).  It is a ratio, so
+# it is comparable across rounds and immune to the score's aggregation quirks.
+loop_speedups() {
+    local dir="$PROJECT_ROOT/reports" f start sf
+    [[ -d "$dir" ]] || return 0
+    sf=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md "$LOOP_DIR"/finalize-state.md \
+         "$LOOP_DIR"/cancel-state.md 2>/dev/null | head -1)
+    start=0
+    if [[ -n "$sf" ]]; then
+        start=$(grep -m1 '^started_at:' "$sf" 2>/dev/null | awk '{print $2}' \
+                | xargs -r -I{} date -u -d {} +%s 2>/dev/null) || start=0
+    fi
+    [[ -n "$start" ]] || start=0
+    for f in $(ls -t "$dir"/cann_final_eval_*.json 2>/dev/null | head -20); do
+        [[ $(stat -c %Y "$f" 2>/dev/null || echo 0) -ge "$start" ]] || continue
+        python3 - "$f" 2>/dev/null <<'PYEOF'
+import json,sys,statistics
+try: d=json.load(open(sys.argv[1]))
+except Exception: raise SystemExit
+for op in d.get("operators") or []:
+    cs=[c for c in (op.get("cases") or []) if c.get("status")=="success" and c.get("elapsed_us")]
+    if not cs: continue
+    sp=[(c.get("baseline_perf_us") or 0)/c["elapsed_us"] for c in cs]
+    sp=[x for x in sp if x>0]
+    if sp: print(f"{statistics.geometric_mean(sp):.6f}")
+    break
+PYEOF
+    done
+}
+
+append_structural_stall_note() {
+    local file="$1" sps verdict n best latest gain
+    sps=$(loop_speedups)                     # 最新在前
+    [[ $(printf '%s\n' "$sps" | grep -c '[0-9]') -ge 3 ]] || return 0
+    verdict=$(printf '%s\n' "$sps" | python3 -c '
+import sys
+v=[float(x) for x in sys.stdin.read().split() if x]
+if len(v) < 3: raise SystemExit(1)
+latest, oldest, best = v[0], v[-1], max(v)
+if oldest <= 0: raise SystemExit(1)
+gain = (latest - oldest) / oldest          # 相对最早一次的净提升
+if gain >= 0.05: raise SystemExit(1)       # 还在涨，不算停滞
+print(f"{len(v)} {oldest:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
+') || return 0
+    read -r n oldest latest best gain <<< "$verdict"
+    local branch=""
+    if [[ -f "$PROJECT_ROOT/docs/headroom.md" ]]; then
+        branch=$(grep -m1 '^> 优先修' "$PROJECT_ROOT/docs/headroom.md" 2>/dev/null | cut -c1-200)
+    fi
+    cat >> "$file" << EOF
+
+## ⛔ 当前结构已经不再产出：该换结构了
+
+本循环 **$n** 次正式评测的几何平均加速比：最早 **$oldest** → 最新 **$latest**
+（净变化 **$gain%**，本循环最好 $best）。按变体协议，"连续多轮提升不足 5%"就是
+**换结构**的触发条件——继续在同一结构上调参不会改变量级。
+
+本轮的动作顺序是固定的：
+
+1. **归档**：\`cp -r solution candidates/v<N>-<结构名>\`，在 \`docs/variants.md\`
+   记一行——结构、最终几何平均加速比、放弃原因。归档不是丢弃。
+2. **选新结构**：读 \`docs/design_recipes/\` 对应算子族的配方，选一个**结构上不同**的
+   方案——换切分维度 / 换数据布局 / 是否走 Cube / 融合方式。
+   **已在 variants.md 里放弃过的结构不得重试。**
+3. **先写设计再动代码**：更新 \`docs/kernel_design_*.md\`（五节齐全、过红线自检）。
+4. **阶段门**：先编译过 + 全部可见 case 精度 + \`bash bench/generalize.sh\` 全过
+   （此阶段禁止性能调优），再做有读数的优化。
+
+选新结构的依据看 \`bash bench/headroom.sh\` 的 device kernel 分支表——覆盖 case 最多、
+可回收分最高的那条分支就是要重写的对象。$branch
+EOF
+}
+
 append_idle_round_note() {
     local file="$1" streak="$2"
     [[ "$streak" -ge 2 ]] || return 0
@@ -1896,6 +1981,7 @@ EOF
     append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
     append_noise_band_note "$next_prompt_file"
     append_regression_note "$next_prompt_file"
+    append_structural_stall_note "$next_prompt_file"
     append_task_tag_routing_note "$next_prompt_file"
 
     jq -n \
