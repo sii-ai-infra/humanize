@@ -2579,6 +2579,14 @@ Reference: @$BITLESSON_FILE
 EOF
 fi
 
+# 停滞类检测器。此前只挂在 continue_review_loop_with_issues() 上，那条路径仅在
+# reviewer 报出问题时才走，因此在正常轮次推进上从未执行——循环可以连续多轮平在
+# 噪声带内而收不到任何提示。这里补到主路径上，与 review 分支保持一致。
+append_idle_round_note "$NEXT_PROMPT_FILE" "$(idle_round_streak)"
+append_noise_band_note "$NEXT_PROMPT_FILE"
+append_regression_note "$NEXT_PROMPT_FILE"
+append_structural_stall_note "$NEXT_PROMPT_FILE"
+
 if [[ "$AGENT_TEAMS" == "true" ]]; then
     ENFORCEMENT_BLOCK="**Delegation Warning**: Do NOT implement code yourself in Agent Teams mode; delegate all coding tasks to team members."
 
