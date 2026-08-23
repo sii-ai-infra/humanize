@@ -97,6 +97,90 @@ idle_round_streak() {
     printf '%s' "$((streak - 1))"   # 减去本条自身
 }
 
+# ========================================
+# Noise-Band Detector (deciding on differences smaller than the measurement spread)
+# ========================================
+# A loop can look busy and still learn nothing: every round produces a candidate
+# and a fresh measurement, but the score moves less than the run-to-run spread, and
+# the agent adopts/rejects on that movement anyway.  Observed on two operators —
+# one cycled "opt: try X" / "docs: reject X" eight times inside an 0.5-point band,
+# the other rejected a whole candidate family on a 0.3-point difference.
+#
+# The band is estimated from the loop's own history rather than hard-coded: take
+# the score of every formal report produced since the loop started, and use
+# peak-to-trough as the observed spread.  If the last few rounds all sit inside it,
+# no adopt/reject decision taken on those differences is supportable.
+#
+# Like the idle-round detector this only appends guidance to the next prompt; it
+# never blocks or terminates.
+recent_scores() {
+    local dir="$PROJECT_ROOT/reports" f
+    [[ -d "$dir" ]] || return 0
+    for f in $(ls -t "$dir"/cann_final_eval_*.json 2>/dev/null | head -8); do
+        python3 - "$f" 2>/dev/null <<'PYEOF'
+import json,sys
+try:
+    d=json.load(open(sys.argv[1]))
+except Exception:
+    raise SystemExit
+for op in d.get("operators") or []:
+    cs=[c for c in (op.get("cases") or []) if c.get("status")=="success" and c.get("elapsed_us")]
+    if cs and op.get("score") is not None:
+        print(f"{op['score']:.4f}"); break
+PYEOF
+    done
+}
+
+append_noise_band_note() {
+    local file="$1" scores n
+    scores=$(recent_scores | head -6)
+    n=$(printf '%s\n' "$scores" | grep -c '[0-9]')
+    [[ "$n" -ge 5 ]] || return 0
+    # recent_scores 按时间倒序（最新在前）。判据要同时满足：
+    #   1) 带宽窄        —— 差异小于重复测量的离散度
+    #   2) 无净趋势      —— 最新与最旧之差也在带内，即在原地来回而不是在爬
+    #   3) 本轮确实动过代码 —— 零产出是另一种病，由 idle-round 检测器负责
+    # 只有"一直在改、一直在测、却始终没离开这个带"才是本检测器要说的事。
+    local verdict
+    verdict=$(printf '%s\n' "$scores" | python3 -c '
+import sys
+v=[float(x) for x in sys.stdin.read().split() if x]
+if len(v) < 5: raise SystemExit(1)
+spread = max(v) - min(v)
+net = v[0] - v[-1]                  # 最新 - 最旧
+if spread > 1.0 or abs(net) >= spread * 0.6: raise SystemExit(1)
+print(f"{min(v):.2f} {max(v):.2f} {spread:.2f} {net:+.2f}")
+') || return 0
+    local lo hi spread net
+    read -r lo hi spread net <<< "$verdict"
+    local changed
+    changed=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" status --porcelain -- solution 2>/dev/null | head -1)
+    if [[ -z "$changed" ]] && [[ -n "$BASE_COMMIT" ]]; then
+        changed=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" log --oneline -1 \
+                  "$BASE_COMMIT..HEAD" -- solution 2>/dev/null)
+    fi
+    [[ -n "$changed" ]] || return 0
+    cat >> "$file" << EOF
+
+## ⛔ 你在噪声带内做取舍
+
+最近 $n 次正式评测的算子分全部落在 **$lo ~ $hi**（带宽 $spread 分），而最新一次相对最早
+一次的净变化只有 $net 分——**在原地来回，不是在爬**。这个带宽是本次循环自己的重复测量
+给出的离散度，**带内的差异不能作为采纳或否决任何候选的依据**。
+
+若上一轮据此否决了某个方案，那个否决不成立；据此采纳的同样不成立。
+
+本轮必须二选一：
+
+1. **提高分辨率**：对要比较的两个版本各跑 2-3 次正式评测，用重复测量把差异与噪声分开；
+   或改用逐 case 的 \`elapsed_us\` 直接对比——它比聚合算子分的噪声小得多。
+2. **换量级**：不要再在这个带里微调。跑 \`bash bench/headroom.sh\` 看 device kernel 分支表，
+   挑覆盖 case 最多、可回收分最高的那条分支做**结构性**改动，目标是让分数跳出这个带。
+
+任何小于 $spread 分的"提升"都无法与重复测量区分。
+EOF
+}
+
 append_idle_round_note() {
     local file="$1" streak="$2"
     [[ "$streak" -ge 2 ]] || return 0
@@ -1723,6 +1807,7 @@ Reference: @$BITLESSON_FILE
 EOF
     fi
     append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
+    append_noise_band_note "$next_prompt_file"
     append_task_tag_routing_note "$next_prompt_file"
 
     jq -n \
