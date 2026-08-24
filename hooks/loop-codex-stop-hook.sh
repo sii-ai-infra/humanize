@@ -133,7 +133,10 @@ PYEOF
 
 append_noise_band_note() {
     local file="$1" scores n
-    scores=$(recent_scores | head -6)
+    # `| head` 会在取够行数后关闭管道，上游 recent_scores 收到 SIGPIPE 退出 141；
+    # pipefail 把它传给整条管道，set -e 于是杀掉整个 hook——噪声带注入丢失，
+    # 其后的回退与结构停滞检测也永远执行不到。用 || true 吸收 SIGPIPE。
+    scores=$(recent_scores | head -6 || true)
     n=$(printf '%s\n' "$scores" | grep -c '[0-9]')
     [[ "$n" -ge 5 ]] || return 0
     # recent_scores 按时间倒序（最新在前）。判据要同时满足：
@@ -154,7 +157,7 @@ print(f"{min(v):.2f} {max(v):.2f} {spread:.2f} {net:+.2f}")
     local lo hi spread net
     read -r lo hi spread net <<< "$verdict"
     local changed
-    changed=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" status --porcelain -- solution 2>/dev/null | head -1)
+    changed=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" status --porcelain -- solution 2>/dev/null | head -1 || true)
     if [[ -z "$changed" ]] && [[ -n "$BASE_COMMIT" ]]; then
         changed=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" log --oneline -1 \
                   "$BASE_COMMIT..HEAD" -- solution 2>/dev/null)
