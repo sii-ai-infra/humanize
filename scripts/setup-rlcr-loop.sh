@@ -48,6 +48,7 @@ CODEX_TIMEOUT="$DEFAULT_CODEX_TIMEOUT"
 PUSH_EVERY_ROUND="false"
 BASE_BRANCH=""
 FULL_REVIEW_ROUND="$DEFAULT_FULL_REVIEW_ROUND"
+FULL_REVIEW_ROUND_EXPLICIT=false
 SKIP_IMPL="false"
 SKIP_IMPL_NO_PLAN="false"
 SKIP_IMPL_PLAN_ANCHORED="false"
@@ -302,6 +303,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             FULL_REVIEW_ROUND="$2"
+            FULL_REVIEW_ROUND_EXPLICIT=true
             shift 2
             ;;
         --skip-impl)
@@ -357,6 +359,19 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# 完整 alignment 检查发生在 round N-1、2N-1…（N = full_review_round）。默认 15 是按
+# DEFAULT_MAX_ITERATIONS=42 标定的；用户缩短循环（如 --max 12）时它不跟着缩，首次
+# 检查就落在第 14 轮、永不触发。实测 exp4 两个 lane 都是 15/12，10 轮里 9 轮 STALLED
+# 却一次完整 review 都没做过。没显式指定就按 max_iterations 缩放。
+if [[ "$FULL_REVIEW_ROUND_EXPLICIT" != "true" ]] \
+   && [[ "$MAX_ITERATIONS" =~ ^[0-9]+$ ]] \
+   && (( FULL_REVIEW_ROUND - 1 >= MAX_ITERATIONS )); then
+    _scaled=$(( (MAX_ITERATIONS + 1) / 2 ))
+    (( _scaled < 2 )) && _scaled=2
+    echo "Note: full_review_round=$FULL_REVIEW_ROUND never fires within $MAX_ITERATIONS rounds; scaling to $_scaled" >&2
+    FULL_REVIEW_ROUND=$_scaled
+fi
 
 if [[ -z "$BENCHMARK_COMMAND" ]]; then
     # 向后兼容：per-round benchmark gate 是后加的特性，不应成为强制项。

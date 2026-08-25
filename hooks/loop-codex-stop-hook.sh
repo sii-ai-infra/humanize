@@ -2561,13 +2561,23 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
         "$MAINLINE_VERDICT_STALLED"|"$MAINLINE_VERDICT_REGRESSED")
             NEXT_MAINLINE_STALL_COUNT=$((MAINLINE_STALL_COUNT + 1))
             NEXT_LAST_MAINLINE_VERDICT="$EXTRACTED_MAINLINE_VERDICT"
-            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 8 ]]; then
+            # 8 / 10 是按 DEFAULT_MAX_ITERATIONS=42 标定的。循环缩短时它们不跟着缩：
+            # 12 轮里要连续停滞 8 次才 replan、11 次才停，而计数器每遇一次 ADVANCED
+            # 就归零。实测 exp4 arg_max 10 轮中 9 轮 STALLED，因 r1/r4 各 ADVANCED 一次，
+            # 最高只累到 5，两道门一次都没到过。按 max_iterations 夹逼，长循环不变。
+            _cap="${MAX_ITERATIONS:-42}"
+            [[ "$_cap" =~ ^[0-9]+$ ]] || _cap=42
+            _replan_at=$(( _cap / 3 )); (( _replan_at < 3 )) && _replan_at=3
+            (( _replan_at > 8 )) && _replan_at=8
+            _stop_at=$(( _cap / 2 )); (( _stop_at < 4 )) && _stop_at=4
+            (( _stop_at > 10 )) && _stop_at=10
+            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge "$_replan_at" ]]; then
                 NEXT_DRIFT_STATUS="$DRIFT_STATUS_REPLAN_REQUIRED"
                 DRIFT_REPLAN_REQUIRED=true
             else
                 NEXT_DRIFT_STATUS="$DRIFT_STATUS_NORMAL"
             fi
-            if [[ "$NEXT_MAINLINE_STALL_COUNT" -gt 10 ]]; then
+            if [[ "$NEXT_MAINLINE_STALL_COUNT" -gt "$_stop_at" ]]; then
                 MAINLINE_DRIFT_STOP=true
             fi
             ;;
