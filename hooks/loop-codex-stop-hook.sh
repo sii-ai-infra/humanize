@@ -131,6 +131,54 @@ PYEOF
     done
 }
 
+# 本轮的权威成绩。不是告警，是事实头——每轮固定注入。
+# 没有它时 review 读到哪份报告算哪份：exp4 里最新报告是 72.85，而 round-6 review
+# 仍在引用更早的 72.82，两份都是真报告，只是没人规定哪份算数。
+append_canonical_report_note() {
+    local file="$1" body
+    body=$(printf '%s\n' "$(loop_eval_files)" | python3 -c '
+import sys, os, json, statistics, time
+
+fs = [x for x in sys.stdin.read().split() if x]      # 最新在前
+def read(p):
+    try: d = json.load(open(p, encoding="utf-8"))
+    except Exception: return None
+    for op in d.get("operators") or []:
+        cs = [c for c in (op.get("cases") or []) if c.get("status")=="success"]
+        ps = [c.get("perf_score") or 0 for c in cs]
+        if not cs or not any(x > 0 for x in ps):     # 编译失败等无效评测
+            return None
+        return (op.get("score"), statistics.fmean(ps), op.get("passed_cases"),
+                op.get("total_cases"))
+    return None
+
+rows = [(p, r) for p in fs for r in [read(p)] if r]
+if not rows:
+    raise SystemExit(1)
+p0, (sc, mean, pas, tot) = rows[0]
+print(f"最新一次有效正式评测：`{os.path.basename(p0)}`")
+ts = time.strftime("%H:%M", time.localtime(os.path.getmtime(p0)))
+print(f"（{ts}，"
+      f"**{sc:.2f} 分**，mean(perf_score) **{mean:.4f}**，通过 {pas}/{tot}）")
+print()
+print("**本轮的一切判断以这一份为准。** 引用更早的报告做结论前，先说明为什么。")
+if len(rows) > 1:
+    hist = "、".join(f"{r[0]:.2f}" for _, r in rows[1:5])
+    print(f"> 本循环更早的几次：{hist}。同一份代码的重复测量应当合并看"
+          f"（取中位数），不要拿其中最好的一次当成绩。")
+skipped = len(fs) - len(rows)
+if skipped:
+    print(f"> 另有 {skipped} 次评测无有效性能数据（编译失败等），已排除。")
+') || return 0
+    [[ -n "$body" ]] || return 0
+    cat >> "$file" << EOF
+
+## 本轮权威成绩
+
+$body
+EOF
+}
+
 append_noise_band_note() {
     local file="$1" scores n
     # `| head` 会在取够行数后关闭管道，上游 recent_scores 收到 SIGPIPE 退出 141；
@@ -2289,6 +2337,7 @@ Reference: @$BITLESSON_FILE
 EOF
     fi
     append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
+    append_canonical_report_note "$next_prompt_file"
     append_noise_band_note "$next_prompt_file"
     append_regression_note "$next_prompt_file"
     append_branch_regression_note "$next_prompt_file"
@@ -2892,6 +2941,7 @@ fi
 # reviewer 报出问题时才走，因此在正常轮次推进上从未执行——循环可以连续多轮平在
 # 噪声带内而收不到任何提示。这里补到主路径上，与 review 分支保持一致。
 append_idle_round_note "$NEXT_PROMPT_FILE" "$(idle_round_streak)"
+append_canonical_report_note "$NEXT_PROMPT_FILE"
 append_noise_band_note "$NEXT_PROMPT_FILE"
 append_regression_note "$NEXT_PROMPT_FILE"
 append_branch_regression_note "$NEXT_PROMPT_FILE"
