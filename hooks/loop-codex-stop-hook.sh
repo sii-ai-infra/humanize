@@ -360,6 +360,66 @@ PYEOF
 # append_regression_note 只看算子级分数，抵消后它不会响；实测 apply_adam_w 就是这样——
 # round 10 把 Float 从 1.33 拉到 1.63（+23%，真 win），同期 Low 相对起点掉了 11.5%，
 # 算子级只显示比起点低 5.3%，没有任何提示指出是哪条在拖后腿。
+# 正式评测没有落到 leaderboard.csv。
+# 「历次尝试」表完全建立在这个文件上——没有行，就无法回答"这条分支已经试过几轮、
+# 动没动"，而那正是 arg_max 十二轮反复挑同一条分支的原因。plan 里写了要更新，
+# 但文字挡不住（profiler 那次已经证明），所以在这里硬查。
+append_leaderboard_gap_note() {
+    local file="$1" verdict files lb
+    lb="$PROJECT_ROOT/leaderboard.csv"
+    files=$(loop_eval_files) || return 0
+    [[ -n "$files" ]] || return 0
+    verdict=$(printf '%s\n' "$files" | python3 -c '
+import sys, os, csv
+
+lb = sys.argv[1]
+fs = [x for x in sys.stdin.read().split() if x]          # 最新在前
+if not fs:
+    raise SystemExit(1)
+
+# 用文件 mtime，不解析 timestamp_utc：实测那一列标着 UTC 但写的是本地时间
+# （本地 13:09 结束的一轮写成 13:09:11Z），按 UTC 解析会让每行都显得晚 8 小时，
+# 于是报告永远不"更新"，检测器永不触发。mtime 两边同源，没有这个歧义。
+newest_lb = os.path.getmtime(lb) if os.path.exists(lb) else 0.0
+rows = 0
+if os.path.exists(lb):
+    try:
+        with open(lb, encoding="utf-8") as fh:
+            rows = sum(1 for rec in csv.DictReader(fh)
+                       if (rec.get("case_name") or "").strip())
+    except Exception:
+        pass
+if rows == 0:
+    newest_lb = 0.0          # 只有表头 = 没记过任何一次
+
+# leaderboard 行可能晚于评测几分钟写入；给 15 分钟宽限，避免刚跑完就误报。
+unrecorded = [f for f in fs if os.path.getmtime(f) > newest_lb + 900]
+if not unrecorded:
+    raise SystemExit(1)
+print(f"{len(unrecorded)}\t{len(fs)}\t{rows}")
+' "$lb") || return 0
+    local n total rows
+    IFS=$'\t' read -r n total rows <<< "$verdict"
+    cat >> "$file" << EOF
+
+## ⛔ 正式评测没有记入 leaderboard.csv
+
+本循环有 **$total** 次正式评测，其中 **$n** 次没有对应的 leaderboard 行
+（文件里现有 $rows 行数据）。
+
+\`bench/headroom.sh\` 的「历次尝试」表完全建立在这个文件上。没有行，它就是空的，
+于是**无法回答"这条分支已经试过几轮、动没动"**——而那正是同一条分支被反复挑中、
+每次都不见效的来源。分支表看不见这件事：它只描述当前一次评测。
+
+**本轮结束前补齐**：每次正式评测后，把该次每个 case 追加一行，至少填
+\`timestamp_utc\`、\`round\`、\`candidate_id\`、\`case_name\`、
+\`correctness_status\`、\`device_time_baseline_us\`、\`device_time_candidate_us\`、
+\`device_time_speedup_x\`。\`candidate_id\` 要能认出这轮改了什么
+（例如 \`round3-batched-row-dma\`），不要用 \`roundN\` 这种无信息的名字——
+历次尝试表末尾会把它列出来，那是日后判断"前几次到底试了什么"的唯一线索。
+EOF
+}
+
 append_branch_regression_note() {
     local file="$1" verdict files
     files=$(loop_eval_files) || return 0
@@ -2226,6 +2286,7 @@ EOF
     append_noise_band_note "$next_prompt_file"
     append_regression_note "$next_prompt_file"
     append_branch_regression_note "$next_prompt_file"
+    append_leaderboard_gap_note "$next_prompt_file"
     append_structural_stall_note "$next_prompt_file"
     append_task_tag_routing_note "$next_prompt_file"
 
@@ -2818,6 +2879,7 @@ append_idle_round_note "$NEXT_PROMPT_FILE" "$(idle_round_streak)"
 append_noise_band_note "$NEXT_PROMPT_FILE"
 append_regression_note "$NEXT_PROMPT_FILE"
 append_branch_regression_note "$NEXT_PROMPT_FILE"
+append_leaderboard_gap_note "$NEXT_PROMPT_FILE"
 append_structural_stall_note "$NEXT_PROMPT_FILE"
 
 if [[ "$AGENT_TEAMS" == "true" ]]; then
