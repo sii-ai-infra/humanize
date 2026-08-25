@@ -353,10 +353,37 @@ loop_eval_files() {
     # 结构切换边界：最近一次归档到 candidates/ 的时刻。切换后只统计新结构的读数，
     # 让新方案至少拿到 3 次正式评测的观察期——否则窗口会跨界混入旧结构的成绩，
     # 刚换就被判停滞，催着再换，形成反复横跳。
+    # 宽限期必须挣来。任何一次归档都重置窗口，会形成一个自洽的循环：
+    # 换结构 → 窗口重置 → 停滞门永远凑不满 3 次评测 → 只剩噪声带门在催 →
+    # 继续换。实测 exp4 arg_max 4 小时归档 8 次、17 次评测，平均每个结构只活
+    # 2 次评测，停滞门 r5-r9 一次没响，而每条分支始终纹丝不动。
+    # 所以：只有当"上一次最好成绩之后的归档次数"还少时才给宽限；连换两次
+    # 都没刷新最好成绩，就不再重置——让停滞门看到完整窗口。
     if [[ -d "$PROJECT_ROOT/candidates" ]]; then
+        local best_at unproductive
+        best_at=$(ls -t "$dir"/cann_final_eval_*.json 2>/dev/null | head -20 \
+            | python3 -c '
+import sys, os, json
+best, at = None, 0
+for p in [x for x in sys.stdin.read().split() if x]:
+    try: d = json.load(open(p, encoding="utf-8"))
+    except Exception: continue
+    for op in d.get("operators") or []:
+        sc = op.get("score")
+        # 编译失败那次分数是 50，不能当成"最好成绩"的参照
+        if sc and any((c.get("perf_score") or 0) > 0 for c in (op.get("cases") or [])):
+            if best is None or sc > best:
+                best, at = sc, int(os.path.getmtime(p))
+        break
+print(at)
+' 2>/dev/null) || best_at=0
+        [[ "$best_at" =~ ^[0-9]+$ ]] || best_at=0
+        unproductive=$(find "$PROJECT_ROOT/candidates" -mindepth 1 -maxdepth 1 -type d \
+            -newermt "@$best_at" 2>/dev/null | grep -c . || true)
         sw=$(find "$PROJECT_ROOT/candidates" -mindepth 1 -maxdepth 1 -type d \
              -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1)
-        if [[ -n "$sw" ]] && [[ "$sw" =~ ^[0-9]+$ ]] && [[ "$sw" -gt "$start" ]]; then
+        if [[ -n "$sw" ]] && [[ "$sw" =~ ^[0-9]+$ ]] && [[ "$sw" -gt "$start" ]] \
+           && [[ "${unproductive:-0}" -lt 2 ]]; then
             start="$sw"
         fi
     fi
@@ -386,7 +413,10 @@ def sp(p):
                 for c in (op.get("cases") or [])
                 if c.get("status")=="success" and c.get("elapsed_us")}
     return {}
-new,old=sp(fs[0]),sp(fs[-1])
+# 和 gain 用同一个窗口（最近 3 次）。取窗口最旧会跨越整个循环：宽限期被收回后
+# 窗口涵盖全程，中间任何一次正确性修复都会让某个 case 动上 10%，把 profiler 门
+# 误抑制掉——实测 arg_max 的 NaN 修复让 case 13 动了 18%。
+new,old=sp(fs[0]),sp(fs[min(2,len(fs)-1)])
 d=[abs(new[k]-old[k])/old[k] for k in new.keys()&old.keys() if old[k]>0]
 print(f"{max(d)*100:.1f}" if d else "0.0")
 ' 2>/dev/null
@@ -609,7 +639,10 @@ print(f"{len(v)} {ref:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
     # 算子级几乎没动，且没有任何单个 case 动过 10% 以上——才算"改动没生效"。
     # 第二个条件保护窄分支：1 个 case 的分支提速 30%，算子级只有 1.3%。
     awk -v g="$gain" -v c="$shift" 'BEGIN{exit !(g<2 && g>-2 && c<10)}' && flat=1
-    pstart=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md 2>/dev/null | head -1)
+    # 与 loop_eval_files 认同一组状态文件，否则循环被取消/完成后 state.md 已改名，
+    # 这里取不到起点，profiler 产物一律算作"没有"。
+    pstart=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md \
+                "$LOOP_DIR"/finalize-state.md "$LOOP_DIR"/cancel-state.md 2>/dev/null | head -1)
     if [[ -d "$PROJECT_ROOT/profile" ]] && [[ -n "$pstart" ]]; then
         find "$PROJECT_ROOT/profile" -type f \
              \( -name '*.csv' -o -name '*.json' -o -name 'msprof.log' \) \
