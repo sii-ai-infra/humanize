@@ -115,7 +115,9 @@ OPTIONS:
   --codex-timeout <SECONDS>
                        Timeout for each Codex review in seconds (default: 5400)
   --benchmark-command <COMMAND>
-                       Required full benchmark command, run once before every round review
+                       Optional full benchmark command, run once before every round review.
+                       Omit it and the per-round benchmark is skipped (a warning is printed);
+                       everything else runs unchanged.
   --benchmark-timeout <SECONDS>
                        Timeout for each full benchmark (default: 5400)
   --push-every-round   Require git push after each round (default: commits stay local)
