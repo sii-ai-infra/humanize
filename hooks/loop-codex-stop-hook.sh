@@ -285,7 +285,7 @@ EOF
 # The trigger is measurable from the reports the loop already produces: the
 # geometric mean of per-case (baseline_perf_us / elapsed_us).  It is a ratio, so
 # it is comparable across rounds and immune to the score's aggregation quirks.
-loop_speedups() {
+loop_eval_files() {
     local dir="$PROJECT_ROOT/reports" f start sf sw
     [[ -d "$dir" ]] || return 0
     sf=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md "$LOOP_DIR"/finalize-state.md \
@@ -308,6 +308,39 @@ loop_speedups() {
     fi
     for f in $(ls -t "$dir"/cann_final_eval_*.json 2>/dev/null | head -20); do
         [[ $(stat -c %Y "$f" 2>/dev/null || echo 0) -ge "$start" ]] || continue
+        printf '%s\n' "$f"
+    done
+}
+
+# 本循环窗口内，任何单个 case 的最大相对变化。
+# 几何平均会把窄分支的成功压没：覆盖 k/n 个 case 的分支提速 m 倍，算子级只动
+# m^(k/n)——1 个 case 的分支真提速 30%，算子级读出来只有 1.3%。只看算子级会把
+# 一次成功的分支级修复误判成"改动没生效"，把 agent 从对的路上赶走。
+loop_case_shift() {
+    local files
+    files=$(loop_eval_files) || return 0
+    [[ -n "$files" ]] || return 0
+    printf '%s\n' "$files" | python3 -c '
+import sys,json
+fs=[x for x in sys.stdin.read().split() if x]      # 最新在前
+if len(fs)<2: raise SystemExit
+def sp(p):
+    try: d=json.load(open(p))
+    except Exception: return {}
+    for op in d.get("operators") or []:
+        return {c["case_id"]:(c.get("baseline_perf_us") or 0)/c["elapsed_us"]
+                for c in (op.get("cases") or [])
+                if c.get("status")=="success" and c.get("elapsed_us")}
+    return {}
+new,old=sp(fs[0]),sp(fs[-1])
+d=[abs(new[k]-old[k])/old[k] for k in new.keys()&old.keys() if old[k]>0]
+print(f"{max(d)*100:.1f}" if d else "0.0")
+' 2>/dev/null
+}
+
+loop_speedups() {
+    local f
+    for f in $(loop_eval_files); do
         python3 - "$f" 2>/dev/null <<'PYEOF'
 import json,sys,statistics
 try: d=json.load(open(sys.argv[1]))
@@ -345,8 +378,11 @@ print(f"{len(v)} {ref:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
     fi
     # 分诊：净变化 < 2% 说明改动压根没生效，此时"换结构"是在缺诊断上加更大的猜测。
     # 只有本循环已经拿到 profiler 产物（说明确实诊断过了）才放行到换结构分支。
-    local flat=0 prof=0 pstart
-    awk -v g="$gain" 'BEGIN{exit !(g<2 && g>-2)}' && flat=1
+    local flat=0 prof=0 pstart shift
+    shift=$(loop_case_shift 2>/dev/null); [[ -n "$shift" ]] || shift=0
+    # 算子级几乎没动，且没有任何单个 case 动过 10% 以上——才算"改动没生效"。
+    # 第二个条件保护窄分支：1 个 case 的分支提速 30%，算子级只有 1.3%。
+    awk -v g="$gain" -v c="$shift" 'BEGIN{exit !(g<2 && g>-2 && c<10)}' && flat=1
     pstart=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md 2>/dev/null | head -1)
     if [[ -d "$PROJECT_ROOT/profile" ]] && [[ -n "$pstart" ]]; then
         find "$PROJECT_ROOT/profile" -type f \
@@ -419,8 +455,11 @@ EOF
    但「已超过 baseline」不等于「已达标」，别把这类分支当成不能碰。
 4. 改完跑正式评测，逐分支比较 \`mean(perf_score)\`，并确认没有分支退步。
 
-**升级条件**：锚分支已试过 **2 个**结构上不同的子方案，且最好的一次相对本级基准
-改善在 **2%–20%** 之间 —— 改动确实生效了，只是不够，这时升到第二级。
+**升级条件**：锚分支已试过 **2 个**结构上不同的子方案，且最好的一次**锚分支自己的
+平均加速比**相对本级基准改善在 **2%–20%** 之间 —— 改动确实生效了，只是不够，升到第二级。
+
+> 注意量的是**分支级**，不是算子级。几何平均会把窄分支的成功压没：覆盖 1 个 case 的
+> 分支真提速 30%，算子级只动 1.3%。别拿上面那个算子级净变化来判断本级是否用尽。
 
 **改善 < 2%（读数没动）不满足升级条件。** 那说明改动压根没生效，换更大的结构只是更大的
 猜测。先补诊断，拿到"是什么在限制它"的证据，再决定动哪儿。分支级改动只影响少数 case，方向对的话效果应该明显；
