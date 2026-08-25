@@ -341,7 +341,44 @@ print(f"{len(v)} {ref:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
     read -r n ref latest best gain <<< "$verdict"
     local branch=""
     if [[ -f "$PROJECT_ROOT/docs/headroom.md" ]]; then
-        branch=$(grep -m1 '^> 优先修' "$PROJECT_ROOT/docs/headroom.md" 2>/dev/null | cut -c1-200)
+        branch=$(grep -m1 '^| `' "$PROJECT_ROOT/docs/headroom.md" 2>/dev/null | cut -c1-200)
+    fi
+    # 分诊：净变化 < 2% 说明改动压根没生效，此时"换结构"是在缺诊断上加更大的猜测。
+    # 只有本循环已经拿到 profiler 产物（说明确实诊断过了）才放行到换结构分支。
+    local flat=0 prof=0 pstart
+    awk -v g="$gain" 'BEGIN{exit !(g<2 && g>-2)}' && flat=1
+    pstart=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md 2>/dev/null | head -1)
+    if [[ -d "$PROJECT_ROOT/profile" ]] && [[ -n "$pstart" ]]; then
+        find "$PROJECT_ROOT/profile" -type f \
+             \( -name '*.csv' -o -name '*.json' -o -name 'msprof.log' \) \
+             -newer "$pstart" -print -quit 2>/dev/null | grep -q . && prof=1
+    fi
+    if [[ "$flat" == 1 ]] && [[ "$prof" == 0 ]]; then
+        cat >> "$file" << EOF
+
+## ⛔ 读数没动，而本循环没有任何 profiler 产物
+
+**最近 3 次**正式评测的几何平均加速比：**$ref** → **$latest**（净变化 **$gain%**）。
+
+净变化在 ±2% 以内不是"这条路难"，是**改动没有碰到真正限制它的东西**——既没变好也没变坏，
+读数根本没动。这种情况下换分支、换结构、加大改动，都只是在缺诊断的基础上换一个更大的猜测。
+arg_max 有过 12 轮这样的记录：七次不同的实现尝试，每条 device kernel 分支的加速比
+小数点后两位都没动过。
+
+**本轮不要再改 kernel。先拿到证据，回答"是什么在限制它"：**
+
+1. \`bash bench/headroom.sh\` 看「历次尝试」表——确认哪些分支已经试过、动没动。
+2. \`bash bench/profile_case.sh <case_id>\` 采一次 msprof（算子无关，配置读 task.env）。
+   看 PipeUtilization：某条流水占用率接近 1.0 就是它在限速；全都不高说明在等待或
+   在做无用功——那时调同步没用。
+3. 独立核一遍数据量：搬运字节数 ÷ 实测耗时 = 有效带宽，和 baseline 的比一比。
+   若你的有效带宽远低于 baseline，说明在做无用功，**减少总工作量**才有用，
+   调 tile / 同步 / batching 不会动读数。
+
+拿到读数后在报告里写明瓶颈是什么、依据哪个数字，再改代码。
+**没有本循环的 profiler 产物就声称瓶颈，是这条门要拦的东西。**
+EOF
+        return 0
     fi
     cat >> "$file" << EOF
 
