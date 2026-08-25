@@ -134,6 +134,63 @@ PYEOF
 # 本轮的权威成绩。不是告警，是事实头——每轮固定注入。
 # 没有它时 review 读到哪份报告算哪份：exp4 里最新报告是 72.85，而 round-6 review
 # 仍在引用更早的 72.82，两份都是真报告，只是没人规定哪份算数。
+# 反复挡下候选的 case。正确性门跑 --no-perf，挂了就不跑性能评测，于是被拒的候选
+# 既没有 final_eval、也没有 leaderboard 行——「历次尝试」表只读 cann_final_eval_*，
+# 完全看不见它。实测 exp4 arg_max 的 half 优化被 case 15 的 float16 NaN 连挡两次
+# （15:12、15:41），两次回退，两次都不知道它到底快不快，第三次再试也不会有人提醒。
+append_blocking_case_note() {
+    local file="$1" body start
+    start=$(loop_start_ts)
+    [[ "$start" -gt 0 ]] || return 0
+    body=$(find "$PROJECT_ROOT/reports" -maxdepth 1 -name 'cann_correctness_eval_*.json' \
+             -newermt "@$start" 2>/dev/null | python3 -c '
+import sys, json, os, collections
+
+blockers = collections.Counter()
+runs = 0
+for p in [x for x in sys.stdin.read().split() if x]:
+    try: d = json.load(open(p, encoding="utf-8"))
+    except Exception: continue
+    for op in d.get("operators") or []:
+        cs = op.get("cases") or []
+        bad = [c for c in cs if c.get("status") != "success"]
+        # 全挂通常是编译失败，不是某个 case 的语义问题
+        if bad and len(bad) < max(1, len(cs) // 2):
+            runs += 1
+            for c in bad:
+                blockers[str(c.get("case_id"))] += 1
+        break
+rep = [(n, cid) for cid, n in blockers.items() if n >= 2]
+if not rep:
+    raise SystemExit(1)
+rep.sort(reverse=True)
+print(f"本循环有 **{runs}** 个候选因少数 case 精度/语义不符被拦下，其中反复出现的：")
+print()
+for n, cid in rep[:5]:
+    print(f"- `{cid}` —— 挡下 **{n}** 个候选")
+') || return 0
+    [[ -n "$body" ]] || return 0
+    cat >> "$file" << EOF
+
+## ⛔ 同一个 case 反复挡下候选
+
+$body
+
+正确性门跑 \`--no-perf\`，挂了就不跑性能评测——**所以这些候选到底快不快，从来没测过**。
+它们也不会出现在 \`leaderboard.csv\` 和「历次尝试」表里（那张表只读 \`cann_final_eval_*\`），
+再试同一个方向不会有任何东西提醒你这是第 N 次。
+
+**本轮二选一，不要第三次原样再试：**
+
+1. **先量再决定**：把候选恢复出来，用 \`bash bench/quick_case.py --case-id <通过的某个>\`
+   量它在**通过的那些 case** 上快多少。快得多就值得单独解决这个 case（给它留旧路径，
+   或补上缺的语义）；不快就是方向本身不成立，和这个 case 无关，别再花时间在它上面。
+2. **换方向**：明确写下这条路被同一个 case 挡了几次、每次的失败机理是什么，再选别的分支。
+
+**不要只写"回退"就进入下一轮**——那样第三次还会撞上同一堵墙。
+EOF
+}
+
 append_canonical_report_note() {
     local file="$1" body
     body=$(printf '%s\n' "$(loop_eval_files)" | python3 -c '
@@ -339,6 +396,20 @@ EOF
 # The trigger is measurable from the reports the loop already produces: the
 # geometric mean of per-case (baseline_perf_us / elapsed_us).  It is a ratio, so
 # it is comparable across rounds and immune to the score's aggregation quirks.
+# 本次循环的起点（epoch 秒）。取状态文件里的 started_at 字段，不取文件 mtime——
+# state.md 每轮都会重写，按 mtime 算会把本轮之前的产物统统排除：profiler 产物
+# 会一律算作"没有"，正确性失败记录会一条都看不见。
+loop_start_ts() {
+    local sf start
+    sf=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md \
+            "$LOOP_DIR"/finalize-state.md "$LOOP_DIR"/cancel-state.md 2>/dev/null | head -1)
+    [[ -n "$sf" ]] || { echo 0; return 0; }
+    start=$(grep -m1 '^started_at:' "$sf" 2>/dev/null | awk '{print $2}' \
+            | xargs -r -I{} date -u -d {} +%s 2>/dev/null) || start=0
+    [[ "$start" =~ ^[0-9]+$ ]] || start=0
+    echo "$start"
+}
+
 loop_eval_files() {
     local dir="$PROJECT_ROOT/reports" f start sf sw
     [[ -d "$dir" ]] || return 0
@@ -639,14 +710,11 @@ print(f"{len(v)} {ref:.4f} {latest:.4f} {best:.4f} {gain*100:+.1f}")
     # 算子级几乎没动，且没有任何单个 case 动过 10% 以上——才算"改动没生效"。
     # 第二个条件保护窄分支：1 个 case 的分支提速 30%，算子级只有 1.3%。
     awk -v g="$gain" -v c="$shift" 'BEGIN{exit !(g<2 && g>-2 && c<10)}' && flat=1
-    # 与 loop_eval_files 认同一组状态文件，否则循环被取消/完成后 state.md 已改名，
-    # 这里取不到起点，profiler 产物一律算作"没有"。
-    pstart=$(ls "$LOOP_DIR"/state.md "$LOOP_DIR"/complete-state.md \
-                "$LOOP_DIR"/finalize-state.md "$LOOP_DIR"/cancel-state.md 2>/dev/null | head -1)
-    if [[ -d "$PROJECT_ROOT/profile" ]] && [[ -n "$pstart" ]]; then
+    pstart=$(loop_start_ts)
+    if [[ -d "$PROJECT_ROOT/profile" ]] && [[ "$pstart" -gt 0 ]]; then
         find "$PROJECT_ROOT/profile" -type f \
              \( -name '*.csv' -o -name '*.json' -o -name 'msprof.log' \) \
-             -newer "$pstart" -print -quit 2>/dev/null | grep -q . && prof=1
+             -newermt "@$pstart" -print -quit 2>/dev/null | grep -q . && prof=1
     fi
     if [[ "$flat" == 1 ]] && [[ "$prof" == 0 ]]; then
         cat >> "$file" << EOF
@@ -2375,6 +2443,7 @@ EOF
     append_regression_note "$next_prompt_file"
     append_branch_regression_note "$next_prompt_file"
     append_leaderboard_gap_note "$next_prompt_file"
+    append_blocking_case_note "$next_prompt_file"
     append_structural_stall_note "$next_prompt_file"
     append_task_tag_routing_note "$next_prompt_file"
 
@@ -2979,6 +3048,7 @@ append_noise_band_note "$NEXT_PROMPT_FILE"
 append_regression_note "$NEXT_PROMPT_FILE"
 append_branch_regression_note "$NEXT_PROMPT_FILE"
 append_leaderboard_gap_note "$NEXT_PROMPT_FILE"
+append_blocking_case_note "$NEXT_PROMPT_FILE"
 append_structural_stall_note "$NEXT_PROMPT_FILE"
 
 if [[ "$AGENT_TEAMS" == "true" ]]; then
