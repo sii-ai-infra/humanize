@@ -875,8 +875,24 @@ append_idle_round_note() {
 EOF
 }
 
-# If no active loop (or session_id mismatch), allow exit
+# 没有活动循环时，这里是 gen-plan 刚跑完的那次 Stop——最早能查 plan 的时机。
+# 只在循环内查（append_plan_gaps_note）意味着最早的反馈要等 round 0 带着残缺的
+# plan 跑完；而 gen-plan 每次丢的东西还不一样（实测同一批：一份丢「历次尝试」，
+# 另一份丢「填缺口需 / 剩余分」）。plan 是刚写的才查，避免在无关的 Stop 上噪声。
 if [[ -z "$LOOP_DIR" ]]; then
+    _pc=$(cd -P "$SCRIPT_DIR" 2>/dev/null && cd ../../.. 2>/dev/null && pwd)/scripts/check_plan.py
+    _pl="$PROJECT_ROOT/.humanize/kernel-agent/plan.md"
+    if [[ -f "$_pc" && -f "$_pl" ]] && [[ -n "$(find "$_pl" -newermt '-180 seconds' 2>/dev/null)" ]]; then
+        if ! _rep=$(python3 "$_pc" "$_pl" 2>&1); then
+            {
+                echo ""
+                echo "$_rep"
+                echo "  ^ gen-plan 压缩掉的。补回 plan 即可，不必重新生成"
+                echo "    （重新生成要先删旧文件——gen-plan 的前置校验遇到已存在的输出会直接 exit 4）。"
+                echo ""
+            } >&2
+        fi
+    fi
     exit 0
 fi
 

@@ -589,6 +589,24 @@ if [[ ! -r "$FULL_PLAN_PATH" ]]; then
     exit 1
 fi
 
+# 诊断口径检查。放在这里而不是只靠 stop hook：hook 在每轮**结束**时才查，最早的反馈
+# 也要等 round 0 带着残缺的 plan 跑完。gen-plan 是 LLM 步骤，每次丢的东西还不一样
+# （实测同一批：一份丢「历次尝试」，另一份丢「填缺口需 / 剩余分」），所以起循环前必须查一次。
+# 默认只警告不拦——设 HUMANIZE_REQUIRE_PLAN_PROTOCOL=1 可改成硬门。
+_plan_checker=$(cd -P "$SCRIPT_DIR" 2>/dev/null && cd ../../.. 2>/dev/null && pwd)/scripts/check_plan.py
+if [[ -f "$_plan_checker" ]]; then
+    if ! _plan_report=$(python3 "$_plan_checker" "$FULL_PLAN_PATH" 2>&1); then
+        echo "" >&2
+        echo "$_plan_report" >&2
+        if [[ "${HUMANIZE_REQUIRE_PLAN_PROTOCOL:-0}" == "1" ]]; then
+            echo "Error: plan 缺诊断口径，且 HUMANIZE_REQUIRE_PLAN_PROTOCOL=1。补齐后重试。" >&2
+            exit 1
+        fi
+        echo "  ^ 补齐后再起循环更划算：缺的这些正是防止「一直换结构却不见效」的那几条。" >&2
+        echo "" >&2
+    fi
+fi
+
 # Check file is within project (no ../ escaping)
 # Resolve the real path by cd'ing to the directory and getting pwd
 # This handles symlinks in parent directories and ../ path components
