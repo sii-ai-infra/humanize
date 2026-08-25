@@ -356,6 +356,118 @@ PYEOF
     done
 }
 
+# 逐分支退步：一条分支变慢，被另一条的收益在算子级抵消掉了。
+# append_regression_note 只看算子级分数，抵消后它不会响；实测 apply_adam_w 就是这样——
+# round 10 把 Float 从 1.33 拉到 1.63（+23%，真 win），同期 Low 相对起点掉了 11.5%，
+# 算子级只显示比起点低 5.3%，没有任何提示指出是哪条在拖后腿。
+append_branch_regression_note() {
+    local file="$1" verdict files
+    files=$(loop_eval_files) || return 0
+    [[ $(printf '%s\n' "$files" | grep -c .) -ge 2 ]] || return 0
+    verdict=$(printf '%s\n' "$files" | python3 -c '
+import sys, json, collections, statistics, re
+
+def readable(sym):
+    """Itanium mangling 按长度前缀顺序切段，取最长的名字。移植自 headroom.py 的
+    kernel_symbol——贪婪正则会把 `_GLOBAL__N_1` 的前缀和下一段的连读，必须顺序解析。"""
+    names, i = [], 0
+    while i < len(sym):
+        m = re.match(r"(\d+)", sym[i:])
+        if not m:
+            i += 1
+            continue
+        n = int(m.group(1))
+        start = i + len(m.group(1))
+        names.append(sym[start:start + n])
+        i = start + n
+    names = [x for x in names if x and not x.startswith("_GLOBAL__")]
+    if not names:
+        return sym[:44]
+    base = max(names, key=len)
+    # 模板参数以 E 终止；非贪婪到第一个 E，再剥掉尾部的 Lb0/Lb1 之类布尔参数
+    t = re.search(re.escape(base) + r"I([A-Za-z0-9_]+?)E", sym)
+    raw = re.sub(r"(Lb\d+)+$", "", t.group(1)) if t else ""
+    tag = {"Dh": "half", "f": "float", "i": "int32", "l": "int64",
+           "u6__bf16": "bf16"}.get(raw, raw)
+    return f"{base}<{tag}>" if tag else base
+
+def per_branch(path):
+    """这次评测里，每条 device kernel 分支的平均加速比。"""
+    try:
+        d = json.load(open(path))
+    except Exception:
+        return {}
+    for op in d.get("operators") or []:
+        acc = collections.defaultdict(list)
+        for c in op.get("cases") or []:
+            if c.get("status") != "success" or not c.get("elapsed_us"):
+                continue
+            dk = (c.get("op_times") or {}).get("device_kernels") or {}
+            if not dk:
+                continue
+            acc[max(dk, key=dk.get)].append((c.get("baseline_perf_us") or 0) / c["elapsed_us"])
+        return {k: statistics.fmean(v) for k, v in acc.items() if v}
+    return {}
+
+fs = [x for x in sys.stdin.read().split() if x]      # 最新在前
+if len(fs) < 2:
+    raise SystemExit(1)
+latest = per_branch(fs[0])
+if not latest:
+    raise SystemExit(1)
+# 和本循环内该分支的最好一次比，而不是只和上一次比——连续几次小步退化
+# 每步都在噪声内，累计起来却很可观。
+best = collections.defaultdict(float)
+for f in fs[1:]:
+    for k, v in per_branch(f).items():
+        best[k] = max(best[k], v)
+out = []
+for k, cur in latest.items():
+    b = best.get(k, 0.0)
+    if b > 0 and (b - cur) / b >= 0.05:              # 噪声实测约 1%，5% 远在其上
+        out.append(((b - cur) / b * 100, k, b, cur))
+if not out:
+    raise SystemExit(1)
+gained = [k for k, cur in latest.items() if best.get(k, 0) > 0 and cur > best[k] * 1.05]
+for pct, k, b, cur in sorted(out, reverse=True)[:4]:
+    print(f"{readable(k)}\t{b:.2f}\t{cur:.2f}\t{pct:.1f}")
+print("GAINED\t" + ",".join(readable(g) for g in gained[:4]))
+') || return 0
+    local rows gained
+    rows=$(printf '%s\n' "$verdict" | grep -v '^GAINED' \
+           | awk -F'\t' '{printf "| `%s` | %s× | %s× | **-%s%%** |\n", $1, $2, $3, $4}')
+    gained=$(printf '%s\n' "$verdict" | grep '^GAINED' | cut -f2)
+    cat >> "$file" << EOF
+
+## ⛔ 有分支在退步（算子级看不出来）
+
+| kernel 符号 | 本循环最好 | 最新 | 退步 |
+|---|---|---|---|
+$rows
+
+算子级分数会把这件事盖住：一条分支涨、另一条跌，加起来可能看着没动。**上面这些是
+真的变慢了**，和本循环内它们自己最好的一次比（不是只和上一次比——连续几次小步退化
+每步都在噪声内，累计起来很可观）。
+
+EOF
+    if [[ -n "$gained" ]]; then
+        cat >> "$file" << EOF
+同期变快的分支：\`$gained\`。**这不能抵消上面的退步**——两者是各自独立的 case，
+退步的那些分数是白丢的。
+
+EOF
+    fi
+    cat >> "$file" << EOF
+**本轮先处理退步，再谈新的优化：**
+
+1. 定位是哪次改动导致的：\`git -C . log --oneline -- solution\` 对照上面几次评测的时间。
+2. 若那次改动的目标分支不是退步的这条，说明它有**跨分支的副作用**——常见来源是共享的
+   tiling / UB 预算 / 分派条件被改动，把别的分支挤到了更差的路径上。
+3. 要么修掉副作用，要么回滚那次改动。**不要靠新的优化去盖过它**：那样每次测量都建立在
+   一个坏基线上，也说不清后面的收益到底来自哪儿。
+EOF
+}
+
 append_structural_stall_note() {
     local file="$1" sps verdict n best latest gain ref
     sps=$(loop_speedups)                     # 最新在前
@@ -2113,6 +2225,7 @@ EOF
     append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
     append_noise_band_note "$next_prompt_file"
     append_regression_note "$next_prompt_file"
+    append_branch_regression_note "$next_prompt_file"
     append_structural_stall_note "$next_prompt_file"
     append_task_tag_routing_note "$next_prompt_file"
 
@@ -2704,6 +2817,7 @@ fi
 append_idle_round_note "$NEXT_PROMPT_FILE" "$(idle_round_streak)"
 append_noise_band_note "$NEXT_PROMPT_FILE"
 append_regression_note "$NEXT_PROMPT_FILE"
+append_branch_regression_note "$NEXT_PROMPT_FILE"
 append_structural_stall_note "$NEXT_PROMPT_FILE"
 
 if [[ "$AGENT_TEAMS" == "true" ]]; then
