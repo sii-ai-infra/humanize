@@ -197,8 +197,12 @@ EOF
 # 不必重新生成。
 append_plan_gaps_note() {
     local file="$1" checker plan body
-    checker="$SCRIPT_DIR/../../../scripts/check_plan.py"
-    [[ -f "$checker" ]] || checker=/data1/jiarui/workspace/cann-bench/kernel-opt-pipeline/scripts/check_plan.py
+    # 解析软链后再往上走：部署时 ~/.codex/skills/humanize/hooks 是指向仓库的软链，
+    # 不解析的话 SCRIPT_DIR 停在 ~/.codex 下，那里没有 scripts/ 兄弟目录。
+    # 早先这里写了一个绝对回退路径，换台机器就失效——不要再那样做。
+    # cd -P 先解析软链：部署时 hooks/ 指向仓库，不解析的话 `..` 会绕回 ~/.codex，
+    # 那里没有 scripts/。早先这里写死过一个绝对回退路径，换机器就失效。
+    checker="$(cd -P "$SCRIPT_DIR" 2>/dev/null && cd ../../.. 2>/dev/null && pwd)/scripts/check_plan.py"
     [[ -f "$checker" ]] || return 0
     plan="$PROJECT_ROOT/${PLAN_FILE:-.humanize/kernel-agent/plan.md}"
     [[ -f "$plan" ]] || return 0
