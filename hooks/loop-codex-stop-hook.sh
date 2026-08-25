@@ -191,6 +191,34 @@ $body
 EOF
 }
 
+# plan 是否还带着诊断口径。gen-plan 是 LLM 步骤，会压缩 draft，而且压缩得不一致：
+# exp4 同一批生成里 arg_max 保住了分支选择规则，apply_adam_w 整段丢了。靠人记得
+# 手动跑一次检查是不可靠的，所以每轮在这里查——缺了直接把该补的话贴回 plan 即可，
+# 不必重新生成。
+append_plan_gaps_note() {
+    local file="$1" checker plan body
+    checker="$SCRIPT_DIR/../../../scripts/check_plan.py"
+    [[ -f "$checker" ]] || checker=/data1/jiarui/workspace/cann-bench/kernel-opt-pipeline/scripts/check_plan.py
+    [[ -f "$checker" ]] || return 0
+    plan="$PROJECT_ROOT/${PLAN_FILE:-.humanize/kernel-agent/plan.md}"
+    [[ -f "$plan" ]] || return 0
+    body=$(python3 "$checker" "$plan" 2>/dev/null) && return 0     # 退出 0 = 齐全
+    [[ -n "$body" ]] || return 0
+    cat >> "$file" << EOF
+
+## ⛔ plan 丢了诊断口径
+
+\`$(basename "$plan")\` 缺下面这些。gen-plan 会压缩 draft，而且**压缩得不一致**——
+exp4 同一批生成里，一个 plan 保住了分支选择规则，另一个整段丢了。
+
+\`\`\`
+$(printf '%s\n' "$body" | sed -n '2,40p')
+\`\`\`
+
+**把缺的补回 plan，不要重新生成**（重新生成会丢掉已有的轮次记录）。补完继续本轮工作。
+EOF
+}
+
 append_canonical_report_note() {
     local file="$1" body
     body=$(printf '%s\n' "$(loop_eval_files)" | python3 -c '
@@ -2442,6 +2470,7 @@ Reference: @$BITLESSON_FILE
 EOF
     fi
     append_idle_round_note "$next_prompt_file" "$(idle_round_streak)"
+    append_plan_gaps_note "$next_prompt_file"
     append_canonical_report_note "$next_prompt_file"
     append_noise_band_note "$next_prompt_file"
     append_regression_note "$next_prompt_file"
@@ -3047,6 +3076,7 @@ fi
 # reviewer 报出问题时才走，因此在正常轮次推进上从未执行——循环可以连续多轮平在
 # 噪声带内而收不到任何提示。这里补到主路径上，与 review 分支保持一致。
 append_idle_round_note "$NEXT_PROMPT_FILE" "$(idle_round_streak)"
+append_plan_gaps_note "$NEXT_PROMPT_FILE"
 append_canonical_report_note "$NEXT_PROMPT_FILE"
 append_noise_band_note "$NEXT_PROMPT_FILE"
 append_regression_note "$NEXT_PROMPT_FILE"
