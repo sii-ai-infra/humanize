@@ -2835,6 +2835,23 @@ completion_cross_check() {
     [[ -z "$prior" ]] && prior=0
     if [[ "$prior" -ge 2 ]]; then
         echo "completion cross-check: already blocked $prior times; honouring terminator." >&2
+        # 放行不等于认可。不记下来的话，complete-state.md 和正常收尾一模一样：
+        # 实测 quant_matmul 在 ACs 2/17 时连声明三次 COMPLETE，靠重复走完收尾，
+        # 状态里 drift_status 还是 normal，从文件上看不出循环是 3/12 轮就断的。
+        if [[ -f "$STATE_FILE" ]] && ! grep -q '^completion_forced:' "$STATE_FILE"; then
+            local _acs _tally
+            _acs=$(printf '%s' "$REVIEW_CONTENT" | grep -oE 'ACs:[[:space:]]*[0-9]+/[0-9]+' | head -1)
+            _tally=$(printf '%s' "$_acs" | grep -oE '[0-9]+/[0-9]+')
+            # 插在 frontmatter 的收尾 --- 之前（第二个 --- 所在行）。
+            awk -v blocks="$prior" -v tally="${_tally:-unknown}" '
+                /^---$/ { n++; if (n == 2) {
+                    print "completion_forced: true"
+                    print "completion_forced_after_blocks: " blocks
+                    print "completion_forced_tally: " tally
+                } }
+                { print }
+            ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
+        fi
         return 0
     fi
 
