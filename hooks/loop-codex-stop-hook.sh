@@ -2829,32 +2829,11 @@ completion_cross_check() {
     [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]] || return 0
     [[ "$REVIEW_STARTED" == "true" ]] && return 0
 
+
     local blocks_file="$LOOP_DIR/.completion-crosscheck-blocks"
     local prior=0
     [[ -s "$blocks_file" ]] && prior=$(tr -dc '0-9' < "$blocks_file" 2>/dev/null)
     [[ -z "$prior" ]] && prior=0
-    if [[ "$prior" -ge 2 ]]; then
-        echo "completion cross-check: already blocked $prior times; honouring terminator." >&2
-        # 放行不等于认可。不记下来的话，complete-state.md 和正常收尾一模一样：
-        # 实测 quant_matmul 在 ACs 2/17 时连声明三次 COMPLETE，靠重复走完收尾，
-        # 状态里 drift_status 还是 normal，从文件上看不出循环是 3/12 轮就断的。
-        if [[ -f "$STATE_FILE" ]] && ! grep -q '^completion_forced:' "$STATE_FILE"; then
-            local _acs _tally
-            _acs=$(printf '%s' "$REVIEW_CONTENT" | grep -oE 'ACs:[[:space:]]*[0-9]+/[0-9]+' | head -1)
-            _tally=$(printf '%s' "$_acs" | grep -oE '[0-9]+/[0-9]+')
-            # 插在 frontmatter 的收尾 --- 之前（第二个 --- 所在行）。
-            awk -v blocks="$prior" -v tally="${_tally:-unknown}" '
-                /^---$/ { n++; if (n == 2) {
-                    print "completion_forced: true"
-                    print "completion_forced_after_blocks: " blocks
-                    print "completion_forced_tally: " tally
-                } }
-                { print }
-            ' "$STATE_FILE" > "$STATE_FILE.tmp" && mv "$STATE_FILE.tmp" "$STATE_FILE"
-        fi
-        return 0
-    fi
-
     local reason="" acs n m changed
     acs=$(printf '%s' "$REVIEW_CONTENT" | grep -oE 'ACs:[[:space:]]*[0-9]+/[0-9]+' | head -1)
     if [[ -n "$acs" ]]; then
@@ -2871,6 +2850,36 @@ completion_cross_check() {
             reason="Nothing under \`solution/\` has changed since the loop's base commit ($BASE_COMMIT). RLCR exists to change the kernel; a run with no implementation change is not complete."
         fi
     fi
+    if [[ "$prior" -ge 2 ]]; then
+        # 上限存在是为了防死锁——反复 block 会让同一轮无限重跑。但「放行」把死锁
+        # 换成了更坏的结果：谁坚持谁赢。实测 quant_matmul 在自报 ACs 2/17 的情况下
+        # 连声明三次 COMPLETE，用掉 3/12 轮收尾，17 条验收标准开着 15 条。
+        # 改成推进一轮：不 block（不死锁），也不接受这个终止符（不放行）。account
+        # 自洽的 COMPLETE 走不到这里，提前停止不受影响；账目对不上的只损失一轮。
+        if [[ -n "$reason" ]] && [[ "$NEXT_ROUND" -le "$MAX_ITERATIONS" ]]; then
+            echo "completion cross-check: 已拦 $prior 次仍未自洽（$reason）；不接受该终止符，推进到第 ${NEXT_ROUND} 轮。" >&2
+            upsert_state_fields "$STATE_FILE" \
+                "complete_rejected_at_round=${CURRENT_ROUND}" \
+                "complete_rejected_blocks=${prior}"
+            LAST_LINE_TRIMMED=""
+            return 0
+        fi
+        echo "completion cross-check: already blocked $prior times; honouring terminator." >&2
+        # 放行不等于认可。不记下来的话，complete-state.md 和正常收尾一模一样：
+        # 实测 quant_matmul 在 ACs 2/17 时连声明三次 COMPLETE，靠重复走完收尾，
+        # 状态里 drift_status 还是 normal，从文件上看不出循环是 3/12 轮就断的。
+        if [[ -f "$STATE_FILE" ]] && ! grep -q '^completion_forced:' "$STATE_FILE"; then
+            local _tally
+            _tally=$(printf '%s' "$REVIEW_CONTENT" | grep -oE 'ACs:[[:space:]]*[0-9]+/[0-9]+' \
+                     | grep -oE '[0-9]+/[0-9]+' | head -1)
+            upsert_state_fields "$STATE_FILE" \
+                "completion_forced=true" \
+                "completion_forced_after_blocks=${prior}" \
+                "completion_forced_tally=${_tally:-unknown}"
+        fi
+        return 0
+    fi
+
     [[ -z "$reason" ]] && return 0
 
     echo $((prior + 1)) > "$blocks_file"
