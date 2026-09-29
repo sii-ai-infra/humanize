@@ -15,7 +15,7 @@ git -C "$TMP_ROOT" commit -qm fixture
 
 LOOP_DIR="$TMP_ROOT/.humanize/rlcr/test"
 mkdir -p "$LOOP_DIR"
-printf '%s' 'echo benchmark-failed; exit 7' >"$LOOP_DIR/benchmark-command.sh"
+printf '%s' 'printf "%s" "$KERNAUT_RLCR_ROUND" > gate-round-env.txt; echo benchmark-failed; exit 7' >"$LOOP_DIR/benchmark-command.sh"
 
 "$ROOT/scripts/run-round-benchmark.sh" \
     --project-root "$TMP_ROOT" --loop-dir "$LOOP_DIR" --round 0 \
@@ -24,6 +24,8 @@ printf '%s' 'echo benchmark-failed; exit 7' >"$LOOP_DIR/benchmark-command.sh"
 grep -Fq 'Status: **failed**' "$LOOP_DIR/round-0-benchmark.md"
 grep -Fq 'Exit code: **7**' "$LOOP_DIR/round-0-benchmark.md"
 grep -q 'benchmark-failed' "$LOOP_DIR/round-0-benchmark.log"
+# The gate exports the round so generated benchmark.py can attribute rows.
+[[ "$(cat "$TMP_ROOT/gate-round-env.txt" 2>/dev/null)" == "0" ]]
 
 # The cumulative rounds report is appended best-effort after the benchmark.
 # Its helper lives in the KOP scaffold; when present, one Round 0 section is

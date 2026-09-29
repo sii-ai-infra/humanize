@@ -55,6 +55,9 @@ fi
 set +e
 (
     cd "$PROJECT_ROOT"
+    # Let the benchmark harness attribute its leaderboard rows to this round;
+    # generated bench/benchmark.py reads this when --round is not passed.
+    export KERNAUT_RLCR_ROUND="$ROUND"
     bash -lc "$COMMAND"
 ) >"$LOG_FILE" 2>&1 &
 BENCHMARK_PID=$!
@@ -116,6 +119,8 @@ if [[ -n "$KOP_SCRIPTS_DIR" ]]; then
         --status "$STATUS" \
         --exit-code "$EXIT_CODE" \
         --git-sha "$HEAD_SHA" \
+        --bench-start "$STARTED_AT" \
+        --bench-end "$FINISHED_AT" \
         >>"$LOG_FILE" 2>&1 || true
 fi
 
