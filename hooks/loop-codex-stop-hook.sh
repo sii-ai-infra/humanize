@@ -664,6 +664,7 @@ Please commit all changes before allowing the loop to exit.
         # active state file stays in place until this cleanliness gate passes.
         _meth_exit_reason=$(cat "$LOOP_DIR/.methodology-exit-reason" 2>/dev/null | tr -d '[:space:]' || echo "")
         if [[ -n "$_meth_exit_reason" ]]; then
+            write_final_rounds_summary "$LOOP_DIR" "$_meth_exit_reason"
             mv "$LOOP_DIR/methodology-analysis-state.md" "$LOOP_DIR/${_meth_exit_reason}-state.md" 2>/dev/null || true
             rm -f "$LOOP_DIR/.methodology-exit-reason"
             echo "Methodology analysis complete. State preserved as: $LOOP_DIR/${_meth_exit_reason}-state.md" >&2
@@ -1026,6 +1027,7 @@ if [[ "$IS_FINALIZE_PHASE" == "true" ]]; then
         exit 0
     fi
     # Methodology analysis skipped or already done - proceed with normal exit
+    write_final_rounds_summary "$LOOP_DIR" "complete"
     mv "$STATE_FILE" "$LOOP_DIR/complete-state.md"
     echo "State preserved as: $LOOP_DIR/complete-state.md" >&2
     exit 0

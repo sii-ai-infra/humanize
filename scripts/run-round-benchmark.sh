@@ -99,6 +99,26 @@ cat >"$RESULT_FILE" <<EOF
 - Full log: \`$(basename "$LOG_FILE")\`
 EOF
 
+# Best-effort cumulative round report under docs/rounds-report.md. The
+# helper lives in the KOP scaffold three levels up from this script; outside
+# that repo layout it is absent and the gate silently continues. Reporting
+# failure is logged to the benchmark log and never blocks this gate.
+KOP_SCRIPTS_DIR=""
+_kop_candidate="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../../../scripts" 2>/dev/null && pwd || true)"
+if [[ -n "${_kop_candidate:-}" && -f "$_kop_candidate/update_rounds_report.py" ]]; then
+    KOP_SCRIPTS_DIR="$_kop_candidate"
+fi
+if [[ -n "$KOP_SCRIPTS_DIR" ]]; then
+    python3 "$KOP_SCRIPTS_DIR/update_rounds_report.py" append-round \
+        --task-root "$PROJECT_ROOT" \
+        --loop-dir "$LOOP_DIR" \
+        --round "$ROUND" \
+        --status "$STATUS" \
+        --exit-code "$EXIT_CODE" \
+        --git-sha "$HEAD_SHA" \
+        >>"$LOG_FILE" 2>&1 || true
+fi
+
 # Benchmark failure is evidence, not a gate runtime failure. The reviewer must
 # receive and assess it, so this helper succeeds once the record is durable.
 exit 0

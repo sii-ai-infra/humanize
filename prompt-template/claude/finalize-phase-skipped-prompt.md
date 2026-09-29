@@ -43,6 +43,7 @@ These constraints are **non-negotiable**:
 2. `[queued]` tasks may remain only if they are documented as non-blocking follow-up work
 3. Commit your changes with a descriptive message
 4. Write your finalize summary to: **{{FINALIZE_SUMMARY_FILE}}**
+5. If `docs/rounds-report.md` exists, append a short narrative conclusion under its `## Final Summary` section (routes rejected with evidence, residual risks, follow-up work). Do not edit the auto-appended Round sections.
 
 Your summary should include:
 - What work was done

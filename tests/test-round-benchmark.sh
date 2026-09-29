@@ -25,12 +25,25 @@ grep -Fq 'Status: **failed**' "$LOOP_DIR/round-0-benchmark.md"
 grep -Fq 'Exit code: **7**' "$LOOP_DIR/round-0-benchmark.md"
 grep -q 'benchmark-failed' "$LOOP_DIR/round-0-benchmark.log"
 
+# The cumulative rounds report is appended best-effort after the benchmark.
+# Its helper lives in the KOP scaffold; when present, one Round 0 section is
+# written under docs/rounds-report.md.
+if [[ -f "$TMP_ROOT/docs/rounds-report.md" ]]; then
+    grep -q '^## Round 0 —' "$TMP_ROOT/docs/rounds-report.md"
+    grep -Fq 'Status: **failed**' "$TMP_ROOT/docs/rounds-report.md"
+    grep -Fq 'no rows recorded for this round' "$TMP_ROOT/docs/rounds-report.md"
+fi
+
 # Repeated Stop events must consume the existing result, not rerun the command.
 printf '%s' 'echo should-not-run; exit 0' >"$LOOP_DIR/benchmark-command.sh"
 "$ROOT/scripts/run-round-benchmark.sh" \
     --project-root "$TMP_ROOT" --loop-dir "$LOOP_DIR" --round 0 \
     --command-file "$LOOP_DIR/benchmark-command.sh" --timeout 10
 ! grep -q 'should-not-run' "$LOOP_DIR/round-0-benchmark.log"
+# The idempotency receipt also keeps the report single-section.
+if [[ -f "$TMP_ROOT/docs/rounds-report.md" ]]; then
+    [[ "$(grep -c '^## Round 0 —' "$TMP_ROOT/docs/rounds-report.md")" == 1 ]]
+fi
 
 printf '%s' 'sleep 5' >"$LOOP_DIR/benchmark-command.sh"
 "$ROOT/scripts/run-round-benchmark.sh" \

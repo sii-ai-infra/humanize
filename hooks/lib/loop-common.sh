@@ -1540,6 +1540,35 @@ Rules:
         "CORRECT_PATH=$correct_path"
 }
 
+# Append the Final Summary section to docs/rounds-report.md via the KOP
+# scaffold helper. Best-effort and idempotent: silent no-op outside the KOP
+# repo layout, and it never blocks loop termination.
+# Usage: write_final_rounds_summary "<loop_dir>" "<complete|cancel|maxiter|stop|unexpected>"
+write_final_rounds_summary() {
+    local loop_dir="$1"
+    local reason="${2:-unknown}"
+
+    local task_root=""
+    task_root="$(cd -P "$loop_dir/../../.." 2>/dev/null && pwd || true)"
+    if [[ -z "$task_root" ]]; then
+        return 0
+    fi
+
+    local kop_scripts_dir=""
+    local candidate
+    candidate="$(cd -P "${_LOOP_COMMON_DIR:-.}/../../../../scripts" 2>/dev/null && pwd || true)"
+    if [[ -n "${candidate:-}" && -f "$candidate/update_rounds_report.py" ]]; then
+        kop_scripts_dir="$candidate"
+    fi
+    if [[ -z "$kop_scripts_dir" ]]; then
+        return 0
+    fi
+
+    python3 "$kop_scripts_dir/update_rounds_report.py" finalize \
+        --task-root "$task_root" \
+        --reason "$reason" >/dev/null 2>&1 || true
+}
+
 # End the loop by renaming state.md to indicate exit reason
 # Usage: end_loop "$loop_dir" "$state_file" "complete|cancel|maxiter|stop|unexpected"
 # Arguments:
@@ -1563,6 +1592,10 @@ end_loop() {
     esac
 
     local target_name="${reason}-state.md"
+
+    # Record the terminal aggregate before the state file is renamed so the
+    # report exists even if the rename itself fails.
+    write_final_rounds_summary "$loop_dir" "$reason"
 
     if [[ -f "$state_file" ]]; then
         mv "$state_file" "$loop_dir/$target_name"
