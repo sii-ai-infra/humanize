@@ -1249,6 +1249,10 @@ Action: none
 Lesson ID(s): NONE
 Notes: [what changed and why]
 SUMMARY_TMPL_EOF
+    if [[ "${KERNELCLI_STAGE_COMPACTION:-0}" == "1" ]]; then
+        source "$SCRIPT_DIR/../hooks/lib/kernaut-handoff.sh"
+        kernaut_append_handoff_template "$summary_path" "$LOOP_DIR" "0"
+    fi
 }
 
 # ========================================

@@ -2105,6 +2105,10 @@ if [[ ! -f "$NEXT_SUMMARY_FILE" ]]; then
 - Lesson ID(s): NONE
 - Notes: [what changed and why]
 EOF
+    if [[ "${KERNELCLI_STAGE_COMPACTION:-0}" == "1" ]]; then
+        source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
+        kernaut_append_handoff_template "$NEXT_SUMMARY_FILE" "$LOOP_DIR" "$NEXT_ROUND"
+    fi
 fi
 NEXT_CONTRACT_FILE="$LOOP_DIR/round-${NEXT_ROUND}-contract.md"
 
@@ -2300,7 +2304,7 @@ fi
 STAGE_BOUNDARY="null"
 if [[ "${KERNELCLI_STAGE_COMPACTION:-0}" == "1" ]]; then
     source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
-    STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE")
+    STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE" "$PROJECT_ROOT")
     STAGE_BOUNDARY="${STAGE_BOUNDARY:-null}"
     cat >> "$NEXT_PROMPT_FILE" << 'KERNAUT_HANDOFF_EOF'
 
