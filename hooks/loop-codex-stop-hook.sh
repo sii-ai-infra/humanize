@@ -2295,14 +2295,32 @@ if [[ "$DRIFT_REPLAN_REQUIRED" == "true" ]]; then
     SYSTEM_MSG="Loop: Round $NEXT_ROUND/$MAX_ITERATIONS - Mainline drift detected, replan required"
 fi
 
-# Block exit and send review feedback
+# Only this normal post-review transition is a completed workflow boundary.
+# Error blocks, repeated review/finalization and terminal paths exit above.
+STAGE_BOUNDARY="null"
+if [[ "${KERNELCLI_STAGE_COMPACTION:-0}" == "1" ]]; then
+    source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
+    STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE")
+    STAGE_BOUNDARY="${STAGE_BOUNDARY:-null}"
+    cat >> "$NEXT_PROMPT_FILE" << 'KERNAUT_HANDOFF_EOF'
+
+## Optimization handoff
+Before editing, read the contract, goal tracker, latest summary/review and saved
+validation receipts. Recover current and best valid candidates separately, with
+source hashes/Git versions, complete correctness/device coverage, geometric and
+minimum per-case speedups, failed cases, unresolved review actions and next
+hypothesis. Missing measurements remain unknown. Preserve the existing loop and
+remaining round budget. Keep these facts and evidence paths in this round's
+summary; use short records and read detailed logs only when needed.
+KERNAUT_HANDOFF_EOF
+fi
+
+# Block exit and send review feedback. Metadata is not model-visible context.
 jq -n \
     --arg reason "$(cat "$NEXT_PROMPT_FILE")" \
     --arg msg "$SYSTEM_MSG" \
-    '{
-        "decision": "block",
-        "reason": $reason,
-        "systemMessage": $msg
-    }'
+    --argjson stageBoundary "$STAGE_BOUNDARY" \
+    '{decision: "block", reason: $reason, systemMessage: $msg}
+     + (if $stageBoundary == null then {} else {stageBoundary: $stageBoundary} end)'
 
 exit 0
