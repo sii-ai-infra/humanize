@@ -71,7 +71,7 @@ If this is a kernel optimization task and the mainline has stalled, the most lik
    - Naive reduction -> warp shuffle reduction -> CUB/multi-stage reduction
    - Separate kernels -> fused kernel
    - Standard launch -> persistent kernel with cooperative groups
-4. **KernelWiki consultation**: if a KernelWiki skill is available, query it for the specific operator type and profiling-identified bottleneck. Treat KernelWiki recommendations and profiling evidence as equally important inputs when choosing the pivot direction.
+4. **KernelWiki consultation**: update task facts affected by the drift and reuse saved method references whose conditions still hold. Retrieve more only for a named unresolved question that changes the pivot decision. Record condition evidence, unknowns/conflicts, the chosen experiment/check and why retrieval stopped. Unmeasured bottlenecks remain hypotheses.
 
 ## Recovery Guardrails
 

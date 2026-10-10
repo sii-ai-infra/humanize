@@ -60,7 +60,7 @@ If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/
 
 **Structural change assessment**: If `leaderboard.csv` shows speedup has plateaued for 2+ consecutive rounds under the same kernel structure, recommend a structural rewrite in your review rather than further incremental tuning. Be specific about what kind of structural change would help and tie the recommendation to profiling evidence where available.
 
-**KernelWiki consultation**: Consult the **KernelWiki** knowledge base to provide optimization guidance. Use the available KernelWiki skill or knowledge-base interface according to its own instructions, then query it for techniques relevant to the profiling-identified bottlenecks.
+**KernelWiki consultation**: Reuse the main agent's saved task facts, method references, condition checks and experiment decision. Check that the selected method matches current computation/layout/numerics and that unknown conditions are addressed. Read the cited method when its conditions or evidence need verification. Retrieve additional knowledge only for a named unresolved question that can change the next experiment; do not repeat navigation or broad searches by default. Distinguish a returned method, a selected hypothesis and a currently validated result.
 
 Include concrete optimization suggestions with profiling observations and wiki page references in your review. Profiling analysis and KernelWiki guidance are equally important evidence sources. These suggestions are advisory and must not block the COMPLETE verdict on their own.
 

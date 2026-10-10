@@ -37,14 +37,22 @@ kernaut_append_handoff_template() {
 ## Optimization Handoff
 - Stage: [optimization or maintenance; maintenance includes format-only work/waiting]
 - Validation evidence: .humanize/rlcr/$(basename "$loop_dir")/round-${round}-benchmark.md
-- Constraints: [contract/case list/harness identity and latest requirements]
+- Constraints: [contract/case list/harness and known knowledge/resource identities; latest requirements]
 - Current candidate: [source hashes/Git version and receipt]
 - Best valid candidate: [source hashes/Git version and receipt, or unknown]
 - Full correctness/device coverage/G/min per-case: [facts or unknown]
 - Failed cases/unresolved review/next hypothesis: [short facts and evidence paths]
 
+## Knowledge Decision
+- Task facts: [actual computation/fusion, shape/stride/dtype and index/numeric/alias rules; source paths; unknowns]
+- Method conditions: [ID/reference; applicable/conditional/incompatible/needs_probe; evidence, missing conditions and keep/reject reason]
+- Selected experiment: [method ID or own hypothesis; intervention and distinguishing check; observed result/receipt or planned]
+- Retrieval decision: [stop because the next experiment/check is defined, or continue for a named question that changes the choice]
+
 Use exactly \`- Stage: optimization\` only for a real optimization experiment with
 saved validation. Validation evidence is one local, nonempty receipt/log path;
 replace the default if needed. Missing measurements remain unknown.
+Keep knowledge decisions short; reuse saved references. A returned method is not
+automatically selected, and a planned experiment is not a validation result.
 EOF
 }

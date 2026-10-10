@@ -75,8 +75,8 @@ If this task is a kernel optimization task, perform these steps before writing c
    - Fusing multiple operations that are currently separate kernels
    - Changing the parallelization strategy (e.g., thread-per-row to warp-per-row, or persistent kernel)
    - Using hardware-specific features not yet exploited (TMA, warp specialization, shared memory swizzling)
-   - Consult the **KernelWiki** knowledge base to provide optimization guidance
-4. **Use both evidence sources**: treat profiling analysis and KernelWiki guidance as equally important. The selected optimization should be justified by measured bottlenecks and relevant knowledge-base recommendations.
+   - Reuse **KernelWiki** methods already read; retrieve more only for a named unresolved question that changes the next experiment
+4. **Use both evidence sources**: justify the selected optimization with current task facts, measured evidence where available, and applicable knowledge. For relevant methods, record condition evidence, unknowns/conflicts and keep/reject reasons. Once an experiment or specific condition check is defined, save the decision and end retrieval. Missing measurements remain hypotheses; an already returned method is not automatically selected.
 5. **Record the decision**: in your round contract, explicitly state whether this round is an incremental tune or a structural rewrite, and why. Include the profiling evidence or explain why profiling was unavailable.
 
 ## Mainline Guardrails

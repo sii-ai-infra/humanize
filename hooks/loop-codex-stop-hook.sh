@@ -2105,7 +2105,7 @@ if [[ ! -f "$NEXT_SUMMARY_FILE" ]]; then
 - Lesson ID(s): NONE
 - Notes: [what changed and why]
 EOF
-    if [[ "${KERNELCLI_STAGE_COMPACTION:-0}" == "1" ]]; then
+    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" ]]; then
         source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
         kernaut_append_handoff_template "$NEXT_SUMMARY_FILE" "$LOOP_DIR" "$NEXT_ROUND"
     fi
@@ -2302,7 +2302,9 @@ fi
 # Only this normal post-review transition is a completed workflow boundary.
 # Error blocks, repeated review/finalization and terminal paths exit above.
 STAGE_BOUNDARY="null"
-if [[ "${KERNELCLI_STAGE_COMPACTION:-0}" == "1" ]]; then
+# Keep decision guidance when the paired runtime disables stage compaction;
+# kernaut_stage_boundary independently checks whether metadata is enabled.
+if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" ]]; then
     source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
     STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE" "$PROJECT_ROOT")
     STAGE_BOUNDARY="${STAGE_BOUNDARY:-null}"
@@ -2316,6 +2318,19 @@ minimum per-case speedups, failed cases, unresolved review actions and next
 hypothesis. Missing measurements remain unknown. Preserve the existing loop and
 remaining round budget. Keep these facts and evidence paths in this round's
 summary; use short records and read detailed logs only when needed.
+
+## Knowledge decision
+Reuse saved task facts and method IDs/sections. Update facts only for changed
+semantics/workloads or new observations; mark missing conditions unknown. Route
+directly to the current operator family, API/pitfall or hardware technique.
+For a few relevant methods, record condition evidence, missing conditions and
+keep/reject reasons in the summary. Separate method exposure from selection.
+Once an actionable experiment or a specific condition check/probe is defined,
+save that decision and end retrieval. Another query needs a named unresolved
+question that would change the choice; navigation does not require a BM25 retry.
+Resolve missing task facts from current materials. Preserve the decision before
+budget exhaustion; do not keep expanding references. Reuse it after compact.
+Read historical code only for the selected method and required implementation.
 KERNAUT_HANDOFF_EOF
 fi
 
