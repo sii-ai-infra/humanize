@@ -2105,7 +2105,7 @@ if [[ ! -f "$NEXT_SUMMARY_FILE" ]]; then
 - Lesson ID(s): NONE
 - Notes: [what changed and why]
 EOF
-    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" ]]; then
+    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
         source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
         kernaut_append_handoff_template "$NEXT_SUMMARY_FILE" "$LOOP_DIR" "$NEXT_ROUND"
     fi
@@ -2302,9 +2302,9 @@ fi
 # Only this normal post-review transition is a completed workflow boundary.
 # Error blocks, repeated review/finalization and terminal paths exit above.
 STAGE_BOUNDARY="null"
-# Keep decision guidance when the paired runtime disables stage compaction;
-# kernaut_stage_boundary independently checks whether metadata is enabled.
-if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" ]]; then
+# KOP and Kernaut share decision guidance. Native stage metadata is emitted
+# only when kernaut_stage_boundary sees KERNELCLI_STAGE_COMPACTION=1.
+if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
     source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
     STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE" "$PROJECT_ROOT")
     STAGE_BOUNDARY="${STAGE_BOUNDARY:-null}"

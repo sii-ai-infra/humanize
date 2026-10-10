@@ -1249,9 +1249,9 @@ Action: none
 Lesson ID(s): NONE
 Notes: [what changed and why]
 SUMMARY_TMPL_EOF
-    # Presence identifies the paired Kernaut runtime; knowledge handoff also
-    # applies when native stage compaction is disabled.
-    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" ]]; then
+    # KOP shares the knowledge handoff without requiring Kernaut's runtime.
+    # Native stage metadata remains gated inside kernaut_stage_boundary.
+    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
         source "$SCRIPT_DIR/../hooks/lib/kernaut-handoff.sh"
         kernaut_append_handoff_template "$summary_path" "$LOOP_DIR" "0"
     fi
