@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: run-round-benchmark.sh --project-root DIR --loop-dir DIR --round N --command-file FILE --timeout SECONDS" >&2
+    echo "Usage: run-round-benchmark.sh --project-root DIR --loop-dir DIR --round N --command-file FILE --timeout SECONDS [--retry] [--final]" >&2
 }
 
 PROJECT_ROOT=""
@@ -11,6 +11,8 @@ LOOP_DIR=""
 ROUND=""
 COMMAND_FILE=""
 TIMEOUT_SECONDS=""
+RETRY_ARGS=()
+FINAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -19,6 +21,8 @@ while [[ $# -gt 0 ]]; do
         --round) ROUND="${2:-}"; shift 2 ;;
         --command-file) COMMAND_FILE="${2:-}"; shift 2 ;;
         --timeout) TIMEOUT_SECONDS="${2:-}"; shift 2 ;;
+        --retry) RETRY_ARGS=(--retry); shift ;;
+        --final) FINAL_ARGS=(--final); shift ;;
         *) usage; exit 2 ;;
     esac
 done
@@ -27,6 +31,13 @@ if [[ -z "$PROJECT_ROOT" || -z "$LOOP_DIR" || ! "$ROUND" =~ ^[0-9]+$ ]] || \
    [[ ! -f "$COMMAND_FILE" || ! "$TIMEOUT_SECONDS" =~ ^[0-9]+$ || "$TIMEOUT_SECONDS" -lt 1 ]]; then
     usage
     exit 2
+fi
+
+if [[ -d "$PROJECT_ROOT/solution" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+    exec python3 "$(dirname "${BASH_SOURCE[0]}")/kernel_round_benchmark.py" \
+        --project-root "$PROJECT_ROOT" --loop-dir "$LOOP_DIR" --round "$ROUND" \
+        --command-file "$COMMAND_FILE" --timeout "$TIMEOUT_SECONDS" "${RETRY_ARGS[@]}" "${FINAL_ARGS[@]}"
 fi
 
 LOG_FILE="$LOOP_DIR/round-${ROUND}-benchmark.log"

@@ -38,7 +38,7 @@ Below is Claude's summary of the work completed:
 
 ## Part 2: Goal Alignment Check (MANDATORY)
 
-Read @{{GOAL_TRACKER_FILE}} and verify:
+{{GOAL_TRACKER_READ_INSTRUCTION}}
 
 1. **Acceptance Criteria Progress**: For each AC, is progress being made? Are any ACs being ignored?
 2. **Forgotten Items**: Are there tasks from the original plan that are not tracked in Active/Completed/Deferred?
@@ -54,13 +54,15 @@ ACs: X/Y addressed | Forgotten items: N | Unjustified deferrals: N
 
 If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work):
 
-**History and profiling audit**: Read `leaderboard.csv`, `git log --oneline -- solution/`, and available profiler output/benchmark traces to check whether Claude reviewed past attempts and measured the current bottleneck. If Claude's round made changes similar to a previously rejected approach without acknowledging it, or made optimization claims without profiling/benchmark evidence where profiling was feasible, flag this as a mainline gap.
+**Experiment feedback audit**: Start from the latest summary conclusion, actual changes and cited candidate/report references. Check whether measured correctness, required case/device coverage, geometric and weakest/regressed case speedups support the hypothesis and proposed next action. Follow detailed reports or older `leaderboard.csv`/Git history for a specific unresolved question. Preserve meaningful failed conditions. Planned work is not measured evidence; partial or older-candidate results do not certify the current full candidate; exit status alone is insufficient. Missing data/infrastructure failure does not establish an algorithmic failure. Check unsubstantiated claims against the existing task gates.
 
 **Profile-guided bottleneck assessment**: Identify whether the evidence points to memory bandwidth, memory access pattern/coalescing, occupancy, register pressure, shared-memory behavior, synchronization, compute throughput, launch overhead, or another bottleneck. Review optimization choices against that measured bottleneck rather than relying on intuition alone.
 
-**Structural change assessment**: If `leaderboard.csv` shows speedup has plateaued for 2+ consecutive rounds under the same kernel structure, recommend a structural rewrite in your review rather than further incremental tuning. Be specific about what kind of structural change would help and tie the recommendation to profiling evidence where available.
+**Next experiment assessment**: Assess whether the measured bottleneck, applicable method conditions and failed attempts justify tuning the current representation or changing expression, algorithm, layout or parallelization. Tie recommendations to evidence; no fixed round count requires a structural rewrite. Multiple evaluations within a round do not consume extra optimization rounds, and related small debugging steps may be summarized together without a new per-call form.
 
 **KernelWiki consultation**: Reuse the main agent's saved task facts, method references, condition checks and experiment decision. Check that the selected method matches current computation/layout/numerics and that unknown conditions are addressed. Read the cited method when its conditions or evidence need verification. Retrieve additional knowledge only for a named unresolved question that can change the next experiment; do not repeat navigation or broad searches by default. Distinguish a returned method, a selected hypothesis and a currently validated result.
+
+**Input reuse**: A new reviewer needs its own applicable conditions and source evidence. Use saved method bodies when actually available, checking known version/source identity; missing, changed, unknown-version or truncated material may be reacquired. Within this review, do not reread unchanged material already in context without a concrete question. Review the complete required case measurements and available kernel breakdowns, not only aggregate numbers or selected examples. Keep the full review findings and existing control output.
 
 Include concrete optimization suggestions with profiling observations and wiki page references in your review. Profiling analysis and KernelWiki guidance are equally important evidence sources. These suggestions are advisory and must not block the COMPLETE verdict on their own.
 

@@ -795,6 +795,32 @@ Please push before exiting."
 fi
 
 # ========================================
+# Kernel delivery uses Git and existing pipeline state. Humanize still owns
+# loop state and budget; those files are never restored with candidate source.
+# ========================================
+kernel_finish_delivery() {
+    local reason="$1" delivery timeout
+    if [[ -d "$PROJECT_ROOT/solution" ]] && \
+       [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+        delivery=$(python3 "$PLUGIN_ROOT/scripts/kernel_candidate.py" finish \
+            --project-root "$PROJECT_ROOT" --reason "$reason") || return 0
+        echo "$delivery" >&2
+        if [[ "$reason" != "stop" ]] && jq -e '.validation_required == true' <<< "$delivery" >/dev/null; then
+            timeout=$(cat "$LOOP_DIR/benchmark-timeout" 2>/dev/null || true)
+            if [[ -s "$LOOP_DIR/benchmark-command.sh" && "$timeout" =~ ^[0-9]+$ && "$timeout" -gt 0 ]]; then
+                # One delivery check, owned by the original benchmark entrypoint;
+                # no agent continuation or new optimization round is started.
+                bash "$PLUGIN_ROOT/scripts/run-round-benchmark.sh" --project-root "$PROJECT_ROOT" \
+                    --loop-dir "$LOOP_DIR" --round "$CURRENT_ROUND" --final \
+                    --command-file "$LOOP_DIR/benchmark-command.sh" --timeout "$timeout" || return 0
+                python3 "$PLUGIN_ROOT/scripts/kernel_candidate.py" finish \
+                    --project-root "$PROJECT_ROOT" --reason "$reason" >&2 || true
+            fi
+        fi
+    fi
+}
+
+# ========================================
 # Check Summary File Exists
 # ========================================
 
@@ -977,6 +1003,7 @@ NEXT_ROUND=$((CURRENT_ROUND + 1))
 # - Review Phase: must continue until [P?] issues are cleared, regardless of iteration count
 if [[ "$IS_FINALIZE_PHASE" != "true" ]] && [[ "$REVIEW_STARTED" != "true" ]] && [[ $NEXT_ROUND -gt $MAX_ITERATIONS ]]; then
     echo "RLCR loop did not complete, but reached max iterations ($MAX_ITERATIONS). Exiting." >&2
+    kernel_finish_delivery maxiter
     # Try to enter methodology analysis phase before final exit
     if enter_methodology_analysis_phase "maxiter" "Reached max iterations ($MAX_ITERATIONS) without completion"; then
         exit 0
@@ -993,6 +1020,7 @@ fi
 
 if [[ "$IS_FINALIZE_PHASE" == "true" ]]; then
     echo "Finalize Phase complete. All checks passed." >&2
+    kernel_finish_delivery complete
     # Try to enter methodology analysis phase before final exit
     if enter_methodology_analysis_phase "complete" "All acceptance criteria met and code review passed"; then
         exit 0
@@ -1129,6 +1157,33 @@ COMMIT_HISTORY_SECTION=$(load_and_render_safe "$TEMPLATE_DIR" "codex/commit-hist
     "COMMIT_HISTORY=$COMMIT_HISTORY" \
     "RECENT_ROUND_FILES=$RECENT_ROUND_FILES")
 
+# Design 14: kernel regular reviews start from existing current state. The
+# original tracker/history remain available; generic and full audits keep the
+# complete reader. An unfamiliar tracker or failed rendering uses that reader.
+GOAL_TRACKER_READ_INSTRUCTION="Read @$GOAL_TRACKER_FILE and verify:"
+if [[ "$FULL_ALIGNMENT_CHECK" != "true" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]] && \
+   command -v python3 >/dev/null 2>&1 && \
+   [[ -f "$PLUGIN_ROOT/scripts/kernel-review-context.py" ]] && \
+   [[ -s "$TEMPLATE_DIR/codex/kernel-review-history.md" ]]; then
+    if TRACKER_VIEW=$(python3 "$PLUGIN_ROOT/scripts/kernel-review-context.py" "$GOAL_TRACKER_FILE"); then
+        # Existing template substitutions travel in environment strings. Limit
+        # that transport to 64 KiB, leaving room for the surrounding template
+        # below the OS per-string argument limit. This is not a compact trigger;
+        # larger views use the unabridged file reader without cutting content.
+        TRACKER_VIEW_BYTES=$(LC_ALL=C printf '%s' "$TRACKER_VIEW" | wc -c)
+        if [[ "$TRACKER_VIEW_BYTES" -le 65536 ]] && \
+           KERNEL_HISTORY_SECTION=$(load_and_render "$TEMPLATE_DIR" "codex/kernel-review-history.md" \
+                "TRACKER_VIEW=$TRACKER_VIEW" \
+                "COMMIT_HISTORY=$COMMIT_HISTORY" \
+                "RECENT_ROUND_FILES=$RECENT_ROUND_FILES") && \
+           [[ -n "$KERNEL_HISTORY_SECTION" ]]; then
+            COMMIT_HISTORY_SECTION="$KERNEL_HISTORY_SECTION"
+            GOAL_TRACKER_READ_INSTRUCTION="Use the current tracker view above. Read @$GOAL_TRACKER_FILE for historical AC evidence, missing/changed state, unresolved issues or contradictions; verify:"
+        fi
+    fi
+fi
+
 # Build the review prompt
 FULL_ALIGNMENT_FALLBACK="# Full Alignment Review (Round {{CURRENT_ROUND}})
 
@@ -1180,6 +1235,7 @@ else
         "PROMPT_FILE=$PROMPT_FILE" \
         "SUMMARY_CONTENT=$SUMMARY_CONTENT" \
         "GOAL_TRACKER_FILE=$GOAL_TRACKER_FILE" \
+        "GOAL_TRACKER_READ_INSTRUCTION=$GOAL_TRACKER_READ_INSTRUCTION" \
         "DOCS_PATH=$DOCS_PATH" \
         "GOAL_TRACKER_UPDATE_SECTION=$GOAL_TRACKER_UPDATE_SECTION" \
         "COMMIT_HISTORY_SECTION=$COMMIT_HISTORY_SECTION" \
@@ -1530,6 +1586,7 @@ This loop should not continue automatically. Revisit the original plan, recover 
         "LAST_VERDICT=$last_verdict" \
         "PLAN_FILE=$PLAN_FILE")
 
+    kernel_finish_delivery stop
     end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_STOP"
 
     jq -n \
@@ -1948,6 +2005,17 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
     fi
 fi
 
+# Record actual optimization review completion in the original loop state.
+# Pre-created summaries and multiple benchmark calls are not completed rounds.
+if [[ "$REVIEW_STARTED" != "true" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+    CONFIRMED_ROUNDS=$(sed -n 's/^completed_optimization_rounds:[[:space:]]*//p' "$STATE_FILE" | head -n 1)
+    if [[ "$CURRENT_ROUND" -eq 0 && -z "$CONFIRMED_ROUNDS" ]] || \
+       [[ "$CONFIRMED_ROUNDS" == "$CURRENT_ROUND" || "$CONFIRMED_ROUNDS" == "$NEXT_ROUND" ]]; then
+        upsert_state_fields "$STATE_FILE" "completed_optimization_rounds=${NEXT_ROUND}"
+    fi
+fi
+
 # Handle COMPLETE - enter Review Phase or Finalize Phase
 if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
     # In review phase, COMPLETE signal is ignored - only absence of [P0-9] triggers finalize
@@ -1959,6 +2027,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
         # Max iterations check
         if [[ $CURRENT_ROUND -ge $MAX_ITERATIONS ]]; then
             echo "Codex review passed but at max iterations ($MAX_ITERATIONS). Terminating as MAXITER." >&2
+            kernel_finish_delivery maxiter
             if enter_methodology_analysis_phase "maxiter" "Codex confirmed COMPLETE but at max iterations ($MAX_ITERATIONS)"; then
                 exit 0
             fi
@@ -2063,6 +2132,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_STOP" ]]; then
     fi
     echo "========================================" >&2
     # Try to enter methodology analysis phase before final exit
+    kernel_finish_delivery stop
     if enter_methodology_analysis_phase "stop" "Circuit breaker triggered - stagnation detected at round $CURRENT_ROUND"; then
         exit 0
     fi
@@ -2073,6 +2143,18 @@ fi
 # ========================================
 # Review Found Issues - Continue Loop
 # ========================================
+
+# Rounds are zero-based: after reviewing N-1, N rounds have been consumed.
+# Finish here instead of publishing an extra round-N optimization prompt.
+if [[ "$REVIEW_STARTED" != "true" && "$NEXT_ROUND" -ge "$MAX_ITERATIONS" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+    kernel_finish_delivery maxiter
+    if enter_methodology_analysis_phase "maxiter" "Reached optimization round budget ($MAX_ITERATIONS)"; then
+        exit 0
+    fi
+    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_MAXITER"
+    exit 0
+fi
 
 # Update state file for next round
 upsert_state_fields "$STATE_FILE" \
@@ -2308,6 +2390,20 @@ if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.
     source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
     STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE" "$PROJECT_ROOT")
     STAGE_BOUNDARY="${STAGE_BOUNDARY:-null}"
+    cat >> "$NEXT_PROMPT_FILE" << EOF
+
+## Latest experiment evidence
+- Latest summary: @$SUMMARY_FILE
+- Latest review: @$REVIEW_RESULT_FILE
+- Stop-gate full benchmark record: @$BENCHMARK_RESULT_FILE
+- Full benchmark log: @$BENCHMARK_LOG_FILE
+
+Read the latest conclusion and unresolved issues first, then follow these
+existing reports and any candidate-specific references saved in the summary.
+Read older history for a concrete unresolved question. These paths identify
+recorded attempts, not certification of the current source: verify candidate,
+configuration and case/device scope before treating results as current/full.
+EOF
     cat >> "$NEXT_PROMPT_FILE" << 'KERNAUT_HANDOFF_EOF'
 
 ## Optimization handoff
@@ -2318,6 +2414,13 @@ minimum per-case speedups, failed cases, unresolved review actions and next
 hypothesis. Missing measurements remain unknown. Preserve the existing loop and
 remaining round budget. Keep these facts and evidence paths in this round's
 summary; use short records and read detailed logs only when needed.
+Connect the chosen hypothesis and actual change to its candidate/report and
+scope, observed outcome and next decision. Keep meaningful counterexamples;
+related small debugging steps can be summarized together. Planned work is not
+measured evidence, partial improvements are not full results, and missing data
+or infrastructure failures do not refute an algorithm. Use the existing
+evaluation entry points; multiple evaluations do not consume extra rounds.
+Choose tuning or a structural change from the evidence, not a fixed round count.
 
 ## Knowledge decision
 Reuse saved task facts and method IDs/sections. Update facts only for changed

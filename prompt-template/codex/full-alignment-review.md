@@ -56,13 +56,15 @@ Critical blockers: [list if any]
 
 If the plan involves kernel optimization (CUDA, Triton, AscendC, or similar GPU/NPU work), assess the optimization trajectory before judging alignment:
 
-**History and profiling audit**: Read `leaderboard.csv`, `docs/draft.md` if present, `git log --oneline -- solution/`, and available profiler output/benchmark traces to understand past attempts, peak speedup, rejected approaches, measured bottlenecks, and whether Claude acknowledged this history. If Claude's recent work repeats a previously rejected approach without justification, or makes optimization claims without profiling/benchmark evidence where profiling was feasible, flag this as a mainline gap.
+**Experiment feedback audit**: Start from the latest summary conclusion, actual changes and candidate/report references, then inspect specific earlier evidence needed to assess the trajectory. Check whether measured correctness, required case/device coverage, geometric and weakest/regressed case speedups support the selected hypotheses and next actions. Preserve meaningful failed conditions and check whether rejected attempts were repeated without new evidence. Planned work is not measured evidence; partial or older-candidate results do not certify the current full candidate; exit status alone is insufficient. Missing data/infrastructure failure does not establish an algorithmic failure. Check unsubstantiated claims against the existing task gates.
 
 **Profile-guided bottleneck assessment**: Identify whether the evidence points to memory bandwidth, memory access pattern/coalescing, occupancy, register pressure, shared-memory behavior, synchronization, compute throughput, launch overhead, or another bottleneck. Use this profiling analysis as a primary input when judging whether the optimization strategy is sound.
 
-**Structural plateau assessment**: Check whether leaderboard speedup has plateaued across recent rounds while Claude keeps editing the same kernel structure. If the same structure has been tuned for 2+ rounds without meaningful improvement, recommend a structural rewrite or fundamentally different parallelization/data-layout strategy rather than more incremental tuning, tied to the profiling evidence where available.
+**Next experiment assessment**: Use measured bottlenecks, applicable method conditions and failed attempts to assess whether to continue tuning or change expression, algorithm, layout or parallelization. No fixed round count requires a structural rewrite. Multiple evaluations within a round do not consume extra optimization rounds, and related small debugging steps may be summarized together without a new per-call form.
 
 **KernelWiki consultation**: Assess the trajectory using the main agent's saved task facts, method references, condition checks and experiment decisions. Verify the cited methods where conditions or evidence are uncertain. If progress has stalled, identify the unresolved question that would change the next experiment, then retrieve relevant alternatives; do not repeat broad navigation or queries by default. Distinguish method exposure, selection and current validation. Include a brief "Profiling and KernelWiki Optimization Recommendations" subsection with measured observations, applicable methods and next checks; unmeasured bottlenecks remain hypotheses. These suggestions are advisory and must not block the COMPLETE verdict on their own.
+
+**Input reuse**: Obtain this review's own source and method-condition evidence; reuse actual saved bodies when applicable, and reacquire changed, unknown-version, truncated or missing material. Avoid reopening unchanged content already available without a concrete question. Keep the full acceptance-criterion/history audit, required case measurements, available kernel breakdowns, full findings and existing control output.
 
 ## Part 2: Mainline Drift Audit (MANDATORY)
 
@@ -113,7 +115,7 @@ The project's `.humanize/rlcr/{{LOOP_TIMESTAMP}}/` directory contains the histor
 - Discussion or implementation loops back to already-rejected approaches without new evidence or rationale
 - No substantive code, test, or design changes despite continued iterations
 - Codex gives similar mainline feedback repeatedly and Claude does not address it
-- For kernel optimization tasks: leaderboard speedup has plateaued for 3+ consecutive rounds, profiling evidence does not support the repeated incremental edits to the same kernel structure, and prior review feedback already requested a structural pivot or clear justification
+- For kernel optimization tasks: the same rejected changes recur without new evidence or a distinguishing experiment; use the measured trajectory and credible next actions, not a fixed plateau-round count, to assess stagnation
 
 **STOP guidance**: Write **STOP** only when the pattern is persistent, blocks meaningful progress toward current-scope goals, and there is no credible next action likely to recover progress. Otherwise, write concrete action items and allow another round.
 
