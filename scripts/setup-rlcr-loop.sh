@@ -16,8 +16,9 @@ set -euo pipefail
 
 # DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT are provided by loop-common.sh
 DEFAULT_CODEX_TIMEOUT=5400
+DEFAULT_BENCHMARK_TIMEOUT=5400
 DEFAULT_MAX_ITERATIONS=42
-DEFAULT_FULL_REVIEW_ROUND=5
+DEFAULT_FULL_REVIEW_ROUND=15
 
 # Default timeout for git operations (30 seconds)
 GIT_TIMEOUT=30
@@ -41,6 +42,7 @@ PLAN_FILE_EXPLICIT=""
 TRACK_PLAN_FILE="false"
 MAX_ITERATIONS="$DEFAULT_MAX_ITERATIONS"
 CODEX_MODEL="$DEFAULT_CODEX_MODEL"
+CODEX_PROFILE="${DEFAULT_CODEX_PROFILE:-}"
 CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
 CODEX_TIMEOUT="$DEFAULT_CODEX_TIMEOUT"
 PUSH_EVERY_ROUND="false"
@@ -52,7 +54,9 @@ SKIP_IMPL_PLAN_ANCHORED="false"
 ASK_CODEX_QUESTION="true"
 AGENT_TEAMS="${DEFAULT_AGENT_TEAMS:-false}"
 BITLESSON_ALLOW_EMPTY_NONE="true"
-PRIVACY_MODE="false"
+PRIVACY_MODE="true"
+BENCHMARK_COMMAND="${HUMANIZE_BENCHMARK_COMMAND:-}"
+BENCHMARK_TIMEOUT="$DEFAULT_BENCHMARK_TIMEOUT"
 
 extract_plan_goal_content() {
     local plan_path="$1"
@@ -104,9 +108,15 @@ OPTIONS:
   --track-plan-file    Indicate plan file should be tracked in git (must be clean)
   --max <N>            Maximum iterations before auto-stop (default: 42)
   --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort for codex exec (default: ${DEFAULT_CODEX_MODEL}:${DEFAULT_CODEX_EFFORT})
+                       Codex model and reasoning effort for codex exec/review (default: ${DEFAULT_CODEX_MODEL}:${DEFAULT_CODEX_EFFORT})
+  --codex-profile <PROFILE>
+                       Codex config profile to pass as `codex -p PROFILE` for exec/review (default: ${DEFAULT_CODEX_PROFILE:-none})
   --codex-timeout <SECONDS>
                        Timeout for each Codex review in seconds (default: 5400)
+  --benchmark-command <COMMAND>
+                       Required full benchmark command, run once before every round review
+  --benchmark-timeout <SECONDS>
+                       Timeout for each full benchmark (default: 5400)
   --push-every-round   Require git push after each round (default: commits stay local)
   --base-branch <BRANCH>
                        Base branch for code review phase (default: auto-detect)
@@ -136,7 +146,8 @@ OPTIONS:
                        Allow BitLesson delta with action:none even with no new entries (default)
   --require-bitlesson-entry-for-none
                        Require at least one BitLesson entry when action is none
-  --privacy            Disable methodology analysis at loop exit (default: analysis enabled)
+  --privacy            No-op; analysis is disabled by default (kept for backward compatibility)
+  --no-privacy         Enable methodology analysis at loop exit (default: analysis disabled)
   -h, --help           Show this help message
 
 DESCRIPTION:
@@ -217,6 +228,14 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --codex-profile|--codex-provider)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --codex-profile requires a PROFILE argument" >&2
+                exit 1
+            fi
+            CODEX_PROFILE="$2"
+            shift 2
+            ;;
         --codex-timeout)
             if [[ -z "${2:-}" ]]; then
                 echo "Error: --codex-timeout requires a number argument (seconds)" >&2
@@ -227,6 +246,22 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             CODEX_TIMEOUT="$2"
+            shift 2
+            ;;
+        --benchmark-command)
+            if [[ -z "${2:-}" ]]; then
+                echo "Error: --benchmark-command requires a non-empty shell command" >&2
+                exit 1
+            fi
+            BENCHMARK_COMMAND="$2"
+            shift 2
+            ;;
+        --benchmark-timeout)
+            if [[ -z "${2:-}" ]] || ! [[ "$2" =~ ^[0-9]+$ ]] || [[ "$2" -lt 1 ]]; then
+                echo "Error: --benchmark-timeout must be a positive integer" >&2
+                exit 1
+            fi
+            BENCHMARK_TIMEOUT="$2"
             shift 2
             ;;
         --push-every-round)
@@ -301,6 +336,10 @@ while [[ $# -gt 0 ]]; do
             PRIVACY_MODE="true"
             shift
             ;;
+        --no-privacy)
+            PRIVACY_MODE="false"
+            shift
+            ;;
         -*)
             echo "Unknown option: $1" >&2
             echo "Use --help for usage information" >&2
@@ -318,6 +357,12 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -z "$BENCHMARK_COMMAND" ]]; then
+    echo "Error: A full benchmark command is required for RLCR." >&2
+    echo "Pass --benchmark-command '<command>' or set HUMANIZE_BENCHMARK_COMMAND." >&2
+    exit 1
+fi
 
 # ========================================
 # Validate Prerequisites
@@ -700,11 +745,19 @@ if [[ "$START_BRANCH" == *[:\#\"\'\`]* ]] || [[ "$START_BRANCH" =~ $'\n' ]]; the
 fi
 
 # Validate codex model for YAML safety
-# Only alphanumeric, hyphen, underscore, dot allowed
-if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+# Only alphanumeric, slash, hyphen, underscore, dot allowed
+if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Error: Codex model contains invalid characters" >&2
     echo "  Model: $CODEX_MODEL" >&2
-    echo "  Only alphanumeric, hyphen, underscore, dot allowed" >&2
+    echo "  Only alphanumeric, slash, hyphen, underscore, dot allowed" >&2
+    exit 1
+fi
+
+# Validate codex profile for CLI/YAML safety
+if [[ -n "$CODEX_PROFILE" && ! "$CODEX_PROFILE" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "Error: Codex profile contains invalid characters" >&2
+    echo "  Profile: $CODEX_PROFILE" >&2
+    echo "  Only alphanumeric, slash, hyphen, underscore, dot allowed" >&2
     exit 1
 fi
 
@@ -882,6 +935,7 @@ cat > "$LOOP_DIR/state.md" << EOF
 current_round: 0
 max_iterations: $MAX_ITERATIONS
 codex_model: $CODEX_MODEL
+codex_profile: $CODEX_PROFILE
 codex_effort: $CODEX_EFFORT
 codex_timeout: $CODEX_TIMEOUT
 push_every_round: $PUSH_EVERY_ROUND
@@ -905,6 +959,11 @@ drift_status: normal
 started_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
 ---
 EOF
+
+# Keep arbitrary shell syntax out of YAML. Validators protect loop control files
+# from agent edits; the Stop gate reads this setup-owned command verbatim.
+printf '%s' "$BENCHMARK_COMMAND" > "$LOOP_DIR/benchmark-command.sh"
+printf '%s\n' "$BENCHMARK_TIMEOUT" > "$LOOP_DIR/benchmark-timeout"
 
 # Create signal file for PostToolUse hook to record session_id
 # The hook will read the session_id from its JSON input and patch state.md
@@ -1176,6 +1235,10 @@ write_summary_template() {
 
 [List tests/commands run and outcomes]
 
+The Stop gate will run the configured full benchmark and create
+`round-0-benchmark.md` plus `round-0-benchmark.log`. Do not substitute a smoke
+test for that mandatory run.
+
 ## Remaining Items
 
 [List any deferred or pending items]
@@ -1186,6 +1249,12 @@ Action: none
 Lesson ID(s): NONE
 Notes: [what changed and why]
 SUMMARY_TMPL_EOF
+    # KOP shares the knowledge handoff without requiring Kernaut's runtime.
+    # Native stage metadata remains gated inside kernaut_stage_boundary.
+    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+        source "$SCRIPT_DIR/../hooks/lib/kernaut-handoff.sh"
+        kernaut_append_handoff_template "$summary_path" "$LOOP_DIR" "0"
+    fi
 }
 
 # ========================================
@@ -1456,6 +1525,7 @@ Mode: Code Review Only (--skip-impl)
 Start Branch: $START_BRANCH
 Base Branch: $BASE_BRANCH
 Codex Model: $CODEX_MODEL
+Codex Profile: ${CODEX_PROFILE:-none}
 Codex Effort: $CODEX_EFFORT
 Codex Timeout: ${CODEX_TIMEOUT}s
 Loop Directory: $LOOP_DIR
@@ -1483,6 +1553,7 @@ Start Branch: $START_BRANCH
 Base Branch: $BASE_BRANCH
 Max Iterations: $MAX_ITERATIONS
 Codex Model: $CODEX_MODEL
+Codex Profile: ${CODEX_PROFILE:-none}
 Codex Effort: $CODEX_EFFORT
 Codex Timeout: ${CODEX_TIMEOUT}s
 Full Review Round: $FULL_REVIEW_ROUND (Full Alignment Checks at rounds $((FULL_REVIEW_ROUND - 1)), $((2 * FULL_REVIEW_ROUND - 1)), $((3 * FULL_REVIEW_ROUND - 1)), ...)

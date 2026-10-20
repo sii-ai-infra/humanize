@@ -31,6 +31,7 @@ readonly FIELD_CURRENT_ROUND="current_round"
 readonly FIELD_MAX_ITERATIONS="max_iterations"
 readonly FIELD_PUSH_EVERY_ROUND="push_every_round"
 readonly FIELD_CODEX_MODEL="codex_model"
+readonly FIELD_CODEX_PROFILE="codex_profile"
 readonly FIELD_CODEX_EFFORT="codex_effort"
 readonly FIELD_CODEX_TIMEOUT="codex_timeout"
 readonly FIELD_REVIEW_STARTED="review_started"
@@ -209,17 +210,19 @@ DEFAULT_BITLESSON_MODEL="${DEFAULT_BITLESSON_MODEL:-haiku}"
 # defaults for all Codex-using features (RLCR, ask-codex).
 # Precedence: pre-set by caller > config value > hardcoded fallback (gpt-5.5/high)
 _cfg_codex_model="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_model" 2>/dev/null || true)"
-if [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+if [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Warning: Invalid codex_model in merged config: $_cfg_codex_model" >&2
-    echo "  Ignoring configured codex_model; using caller preset or fallback" >&2
-    _cfg_codex_model=""
-elif [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^(gpt-|o[0-9]) ]]; then
-    echo "Warning: Unsupported codex_model in merged config: $_cfg_codex_model" >&2
-    echo "  Must start with a Codex model prefix: gpt- or o[0-9]" >&2
     echo "  Ignoring configured codex_model; using caller preset or fallback" >&2
     _cfg_codex_model=""
 fi
 DEFAULT_CODEX_MODEL="${DEFAULT_CODEX_MODEL:-${_cfg_codex_model:-gpt-5.5}}"
+_cfg_codex_profile="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_profile" 2>/dev/null || true)"
+if [[ -n "$_cfg_codex_profile" && ! "$_cfg_codex_profile" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "Warning: Invalid codex_profile in merged config: $_cfg_codex_profile" >&2
+    echo "  Ignoring configured codex_profile; using caller preset or fallback" >&2
+    _cfg_codex_profile=""
+fi
+DEFAULT_CODEX_PROFILE="${DEFAULT_CODEX_PROFILE:-$_cfg_codex_profile}"
 _cfg_codex_effort="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_effort" 2>/dev/null || true)"
 if [[ -n "$_cfg_codex_effort" && ! "$_cfg_codex_effort" =~ ^(xhigh|high|medium|low)$ ]]; then
     echo "Warning: Invalid codex_effort in merged config: $_cfg_codex_effort" >&2
@@ -233,7 +236,7 @@ DEFAULT_CODEX_EFFORT="${DEFAULT_CODEX_EFFORT:-${_cfg_codex_effort:-high}}"
 # Precedence: pre-set by caller (e.g. --agent-teams flag) > config value > hardcoded fallback (false)
 _cfg_agent_teams="$(get_config_value "$_LOOP_COMMON_CONFIG" "agent_teams" 2>/dev/null || true)"
 DEFAULT_AGENT_TEAMS="${DEFAULT_AGENT_TEAMS:-${_cfg_agent_teams:-false}}"
-unset _cfg_codex_model _cfg_codex_effort _cfg_agent_teams
+unset _cfg_codex_model _cfg_codex_profile _cfg_codex_effort _cfg_agent_teams
 
 unset _LOOP_COMMON_PROJECT_ROOT _LOOP_COMMON_CONFIG
 
@@ -379,7 +382,7 @@ find_active_loop() {
         fi
 
         local stored_session_id
-        stored_session_id=$(sed -n '/^---$/,/^---$/{ /^'"${FIELD_SESSION_ID}"':/{ s/'"${FIELD_SESSION_ID}"': *//; p; } }' "$any_state" 2>/dev/null | tr -d ' ')
+        stored_session_id=$(awk -v key="${FIELD_SESSION_ID}" 'BEGIN{f=0} /^---$/{f++; next} f==1 && $0 ~ "^"key":"{sub("^"key":[[:space:]]*",""); print; exit}' "$any_state" 2>/dev/null | tr -d ' ')
 
         # Empty stored session_id matches any session (backward compat).
         if [[ -z "$stored_session_id" ]] || [[ "$stored_session_id" == "$filter_session_id" ]]; then
@@ -455,6 +458,7 @@ _parse_state_fields() {
     STATE_MAX_ITERATIONS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_MAX_ITERATIONS}:" | sed "s/${FIELD_MAX_ITERATIONS}: *//" | tr -d ' ' || true)
     STATE_PUSH_EVERY_ROUND=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_PUSH_EVERY_ROUND}:" | sed "s/${FIELD_PUSH_EVERY_ROUND}: *//" | tr -d ' ' || true)
     STATE_CODEX_MODEL=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_MODEL}:" | sed "s/${FIELD_CODEX_MODEL}: *//" | tr -d ' ' || true)
+    STATE_CODEX_PROFILE=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_PROFILE}:" | sed "s/${FIELD_CODEX_PROFILE}: *//" | tr -d ' ' || true)
     STATE_CODEX_EFFORT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_EFFORT}:" | sed "s/${FIELD_CODEX_EFFORT}: *//" | tr -d ' ' || true)
     STATE_CODEX_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_TIMEOUT}:" | sed "s/${FIELD_CODEX_TIMEOUT}: *//" | tr -d ' ' || true)
     STATE_REVIEW_STARTED=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_REVIEW_STARTED}:" | sed "s/${FIELD_REVIEW_STARTED}: *//" | tr -d ' ' || true)
@@ -480,6 +484,7 @@ _parse_state_fields() {
 #   STATE_MAX_ITERATIONS - max iterations
 #   STATE_PUSH_EVERY_ROUND - "true" or "false"
 #   STATE_CODEX_MODEL - codex model name
+#   STATE_CODEX_PROFILE - optional Codex config profile name (-p/--profile)
 #   STATE_CODEX_EFFORT - codex effort level
 #   STATE_CODEX_TIMEOUT - codex timeout in seconds
 #   STATE_REVIEW_STARTED - "true" or "false"
@@ -809,8 +814,8 @@ extract_round_number() {
     local filename_lower
     filename_lower=$(to_lower "$filename")
 
-    # Use sed for portable regex extraction (works in both bash and zsh)
-    echo "$filename_lower" | sed -n 's/.*round-\([0-9][0-9]*\)-\(summary\|prompt\|todos\|contract\)\.md$/\1/p'
+    # Use ERE (-E) so | alternation works on both GNU and BSD sed (macOS)
+    echo "$filename_lower" | sed -En 's/.*round-([0-9]+)-(summary|prompt|todos|contract)\.md$/\1/p'
 }
 
 # Check if a file is in the allowlist for the active loop
@@ -820,6 +825,11 @@ is_allowlisted_file() {
     local file_path="$1"
     local active_loop_dir="$2"
 
+    # Canonicalize both paths to resolve symlinks (e.g. /var -> /private/var on macOS).
+    local canonical_file canonical_loop
+    canonical_file=$(canonicalize_path "$file_path" 2>/dev/null || echo "$file_path")
+    canonical_loop=$(canonicalize_path "$active_loop_dir" 2>/dev/null || echo "$active_loop_dir")
+
     local allowlist=(
         "round-1-todos.md"
         "round-2-todos.md"
@@ -828,7 +838,7 @@ is_allowlisted_file() {
     )
 
     for allowed in "${allowlist[@]}"; do
-        if [[ "$file_path" == "$active_loop_dir/$allowed" ]]; then
+        if [[ "$canonical_file" == "$canonical_loop/$allowed" ]]; then
             return 0
         fi
     done
@@ -1522,7 +1532,7 @@ Use Write or Edit on: {{CORRECT_PATH}}
 
 Rules:
 - Keep the **IMMUTABLE SECTION** unchanged
-- Do not modify `goal-tracker.md` via Bash
+- Do not modify goal-tracker.md via Bash
 - Do not write to an old loop session's tracker"
 
     load_and_render_safe "$TEMPLATE_DIR" "block/goal-tracker-modification.md" "$fallback" \

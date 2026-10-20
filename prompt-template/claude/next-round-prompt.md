@@ -64,6 +64,16 @@ Before starting work, **read** @{{GOAL_TRACKER_FILE}} to understand:
 Do NOT change the immutable section after Round 0.
 If you cannot safely reconcile the tracker yourself, include an optional "Goal Tracker Update Request" section in your summary (see below).
 
+## Kernel Optimization Re-anchor (when applicable)
+
+If this task is a kernel optimization task, perform these steps before writing code:
+
+1. **Start from latest feedback**: read the latest summary/review conclusion and its existing candidate/report references. Check actual correctness, required case/device coverage, geometric speedup, weakest/regressed cases and unresolved issues. Missing metrics remain unknown; exit status alone does not establish full validity. Consult `leaderboard.csv`, `docs/draft.md`, earlier reports or `git log --oneline -- solution/` for a concrete unresolved question, such as a prior rejection or candidate lineage.
+2. **Define the next experiment**: briefly connect current task facts, measured evidence and applicable knowledge to the proposed change and a distinguishing check in the existing Selected experiment/summary. Reuse saved method references; retrieve more only for a named question that can change the choice. A returned method is not automatically selected, and an unmeasured bottleneck remains a hypothesis. End retrieval when an actionable experiment or condition check is defined.
+3. **Use measured feedback**: reuse available profiles and inspect the smallest relevant additional measurement when needed. Choose incremental tuning, an expression/algorithm change, fusion or a different layout/parallelization from the evidence; no fixed number of rounds requires a structural rewrite. Related changes and multiple evaluations are allowed within this round without new per-call forms or extra round charges. Keep the existing profiling rule: deep diagnostic profiling follows a kernel-code change; full gates and failed collection retries follow the contract.
+4. **Record outcome and next decision**: after running the existing evaluation commands, cite the actual change, candidate version, report/job reference and validation scope in the existing summary. Briefly say whether the measurement supports the hypothesis and what to keep, adjust or replace. Preserve meaningful failed conditions and counterexamples; small debugging steps may be summarized together. Planned work is not measured evidence; partial-case gains are not full results; an older candidate's report cannot certify changed source. Missing data/infrastructure failure does not refute an algorithm.
+5. **Preserve the handoff**: carry the outcome, unresolved review issues, necessary counterexamples and next decision in the existing summary/handoff. Recover the same loop and remaining budget after compact/resume. The Stop-gate full evaluation and contract constraints remain required.
+
 ## Mainline Guardrails
 
 - Keep the mainline objective from @{{ROUND_CONTRACT_FILE}} stable for this round

@@ -134,6 +134,7 @@ PUSH_EVERY_ROUND="$STATE_PUSH_EVERY_ROUND"
 FULL_REVIEW_ROUND="${STATE_FULL_REVIEW_ROUND:-5}"
 REVIEW_STARTED="$STATE_REVIEW_STARTED"
 CODEX_EXEC_MODEL="${STATE_CODEX_MODEL:-$DEFAULT_CODEX_MODEL}"
+CODEX_EXEC_PROFILE="${STATE_CODEX_PROFILE:-${DEFAULT_CODEX_PROFILE:-}}"
 CODEX_EXEC_EFFORT="${STATE_CODEX_EFFORT:-$DEFAULT_CODEX_EFFORT}"
 CODEX_REVIEW_MODEL="$CODEX_EXEC_MODEL"
 CODEX_REVIEW_EFFORT="high"
@@ -171,8 +172,13 @@ LAST_MAINLINE_VERDICT="${STATE_LAST_MAINLINE_VERDICT:-$MAINLINE_VERDICT_UNKNOWN}
 DRIFT_STATUS="${STATE_DRIFT_STATUS:-$DRIFT_STATUS_NORMAL}"
 # Re-validate Codex Model and Effort for YAML safety (in case state.md was manually edited)
 # Use same validation patterns as setup-rlcr-loop.sh
-if [[ ! "$CODEX_EXEC_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+if [[ ! "$CODEX_EXEC_MODEL" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Error: Invalid codex_model in state file: $CODEX_EXEC_MODEL" >&2
+    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
+    exit 0
+fi
+if [[ -n "$CODEX_EXEC_PROFILE" && ! "$CODEX_EXEC_PROFILE" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
+    echo "Error: Invalid codex_profile in state file: $CODEX_EXEC_PROFILE" >&2
     end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
     exit 0
 fi
@@ -654,7 +660,14 @@ Please commit all changes before allowing the loop to exit.
                 exit 0
             fi
         fi
-        # Analysis complete and tree clean, allow exit
+        # Analysis complete and tree clean. Now do the terminal rename so the
+        # active state file stays in place until this cleanliness gate passes.
+        _meth_exit_reason=$(cat "$LOOP_DIR/.methodology-exit-reason" 2>/dev/null | tr -d '[:space:]' || echo "")
+        if [[ -n "$_meth_exit_reason" ]]; then
+            mv "$LOOP_DIR/methodology-analysis-state.md" "$LOOP_DIR/${_meth_exit_reason}-state.md" 2>/dev/null || true
+            rm -f "$LOOP_DIR/.methodology-exit-reason"
+            echo "Methodology analysis complete. State preserved as: $LOOP_DIR/${_meth_exit_reason}-state.md" >&2
+        fi
         exit 0
     else
         # Analysis not yet complete, block
@@ -780,6 +793,32 @@ Please push before exiting."
         fi
     fi
 fi
+
+# ========================================
+# Kernel delivery uses Git and existing pipeline state. Humanize still owns
+# loop state and budget; those files are never restored with candidate source.
+# ========================================
+kernel_finish_delivery() {
+    local reason="$1" delivery timeout
+    if [[ -d "$PROJECT_ROOT/solution" ]] && \
+       [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+        delivery=$(python3 "$PLUGIN_ROOT/scripts/kernel_candidate.py" finish \
+            --project-root "$PROJECT_ROOT" --reason "$reason") || return 0
+        echo "$delivery" >&2
+        if [[ "$reason" != "stop" ]] && jq -e '.validation_required == true' <<< "$delivery" >/dev/null; then
+            timeout=$(cat "$LOOP_DIR/benchmark-timeout" 2>/dev/null || true)
+            if [[ -s "$LOOP_DIR/benchmark-command.sh" && "$timeout" =~ ^[0-9]+$ && "$timeout" -gt 0 ]]; then
+                # One delivery check, owned by the original benchmark entrypoint;
+                # no agent continuation or new optimization round is started.
+                bash "$PLUGIN_ROOT/scripts/run-round-benchmark.sh" --project-root "$PROJECT_ROOT" \
+                    --loop-dir "$LOOP_DIR" --round "$CURRENT_ROUND" --final \
+                    --command-file "$LOOP_DIR/benchmark-command.sh" --timeout "$timeout" || return 0
+                python3 "$PLUGIN_ROOT/scripts/kernel_candidate.py" finish \
+                    --project-root "$PROJECT_ROOT" --reason "$reason" >&2 || true
+            fi
+        fi
+    fi
+}
 
 # ========================================
 # Check Summary File Exists
@@ -964,6 +1003,7 @@ NEXT_ROUND=$((CURRENT_ROUND + 1))
 # - Review Phase: must continue until [P?] issues are cleared, regardless of iteration count
 if [[ "$IS_FINALIZE_PHASE" != "true" ]] && [[ "$REVIEW_STARTED" != "true" ]] && [[ $NEXT_ROUND -gt $MAX_ITERATIONS ]]; then
     echo "RLCR loop did not complete, but reached max iterations ($MAX_ITERATIONS). Exiting." >&2
+    kernel_finish_delivery maxiter
     # Try to enter methodology analysis phase before final exit
     if enter_methodology_analysis_phase "maxiter" "Reached max iterations ($MAX_ITERATIONS) without completion"; then
         exit 0
@@ -980,6 +1020,7 @@ fi
 
 if [[ "$IS_FINALIZE_PHASE" == "true" ]]; then
     echo "Finalize Phase complete. All checks passed." >&2
+    kernel_finish_delivery complete
     # Try to enter methodology analysis phase before final exit
     if enter_methodology_analysis_phase "complete" "All acceptance criteria met and code review passed"; then
         exit 0
@@ -1005,6 +1046,59 @@ REVIEW_PROMPT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-review-prompt.md"
 REVIEW_RESULT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-review-result.md"
 
 SUMMARY_CONTENT=$(cat "$SUMMARY_FILE")
+
+# ========================================
+# Mandatory Full Benchmark (every normal round)
+# ========================================
+
+if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
+    BENCHMARK_COMMAND_FILE="$LOOP_DIR/benchmark-command.sh"
+    BENCHMARK_TIMEOUT_FILE="$LOOP_DIR/benchmark-timeout"
+    BENCHMARK_RESULT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-benchmark.md"
+    BENCHMARK_LOG_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-benchmark.log"
+
+    if [[ ! -s "$BENCHMARK_COMMAND_FILE" || ! -s "$BENCHMARK_TIMEOUT_FILE" ]]; then
+        jq -n \
+            --arg reason "Mandatory full benchmark configuration is missing. Restart RLCR with --benchmark-command '<full benchmark command>'." \
+            --arg msg "Loop: blocked - full benchmark configuration missing" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+    fi
+
+    BENCHMARK_TIMEOUT=$(cat "$BENCHMARK_TIMEOUT_FILE")
+    if ! [[ "$BENCHMARK_TIMEOUT" =~ ^[0-9]+$ ]] || [[ "$BENCHMARK_TIMEOUT" -lt 1 ]]; then
+        jq -n \
+            --arg reason "Mandatory full benchmark timeout is invalid. Restart RLCR with a positive --benchmark-timeout." \
+            --arg msg "Loop: blocked - invalid full benchmark timeout" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+    fi
+
+    bash "$PLUGIN_ROOT/scripts/run-round-benchmark.sh" \
+        --project-root "$PROJECT_ROOT" \
+        --loop-dir "$LOOP_DIR" \
+        --round "$CURRENT_ROUND" \
+        --command-file "$BENCHMARK_COMMAND_FILE" \
+        --timeout "$BENCHMARK_TIMEOUT"
+
+    if [[ ! -s "$BENCHMARK_RESULT_FILE" || ! -f "$BENCHMARK_LOG_FILE" ]]; then
+        jq -n \
+            --arg reason "The mandatory full benchmark did not produce its result and log artifacts. Fix the benchmark runner before review." \
+            --arg msg "Loop: blocked - full benchmark evidence missing" \
+            '{decision:"block", reason:$reason, systemMessage:$msg}'
+        exit 0
+    fi
+
+    BENCHMARK_EVIDENCE=$(cat "$BENCHMARK_RESULT_FILE")
+    SUMMARY_CONTENT="${SUMMARY_CONTENT}
+
+## Stop-gate Full Benchmark Evidence
+
+${BENCHMARK_EVIDENCE}
+
+The benchmark was mandatory for this round. A failed or timed-out run is still
+valid recorded evidence, but its impact must be assessed before completion."
+fi
 
 # Shared prompt section for Goal Tracker Update Requests (used in both Full Alignment and Regular reviews)
 GOAL_TRACKER_SECTION_FALLBACK="## Goal Tracker Updates
@@ -1063,6 +1157,33 @@ COMMIT_HISTORY_SECTION=$(load_and_render_safe "$TEMPLATE_DIR" "codex/commit-hist
     "COMMIT_HISTORY=$COMMIT_HISTORY" \
     "RECENT_ROUND_FILES=$RECENT_ROUND_FILES")
 
+# Design 14: kernel regular reviews start from existing current state. The
+# original tracker/history remain available; generic and full audits keep the
+# complete reader. An unfamiliar tracker or failed rendering uses that reader.
+GOAL_TRACKER_READ_INSTRUCTION="Read @$GOAL_TRACKER_FILE and verify:"
+if [[ "$FULL_ALIGNMENT_CHECK" != "true" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]] && \
+   command -v python3 >/dev/null 2>&1 && \
+   [[ -f "$PLUGIN_ROOT/scripts/kernel-review-context.py" ]] && \
+   [[ -s "$TEMPLATE_DIR/codex/kernel-review-history.md" ]]; then
+    if TRACKER_VIEW=$(python3 "$PLUGIN_ROOT/scripts/kernel-review-context.py" "$GOAL_TRACKER_FILE"); then
+        # Existing template substitutions travel in environment strings. Limit
+        # that transport to 64 KiB, leaving room for the surrounding template
+        # below the OS per-string argument limit. This is not a compact trigger;
+        # larger views use the unabridged file reader without cutting content.
+        TRACKER_VIEW_BYTES=$(LC_ALL=C printf '%s' "$TRACKER_VIEW" | wc -c)
+        if [[ "$TRACKER_VIEW_BYTES" -le 65536 ]] && \
+           KERNEL_HISTORY_SECTION=$(load_and_render "$TEMPLATE_DIR" "codex/kernel-review-history.md" \
+                "TRACKER_VIEW=$TRACKER_VIEW" \
+                "COMMIT_HISTORY=$COMMIT_HISTORY" \
+                "RECENT_ROUND_FILES=$RECENT_ROUND_FILES") && \
+           [[ -n "$KERNEL_HISTORY_SECTION" ]]; then
+            COMMIT_HISTORY_SECTION="$KERNEL_HISTORY_SECTION"
+            GOAL_TRACKER_READ_INSTRUCTION="Use the current tracker view above. Read @$GOAL_TRACKER_FILE for historical AC evidence, missing/changed state, unresolved issues or contradictions; verify:"
+        fi
+    fi
+fi
+
 # Build the review prompt
 FULL_ALIGNMENT_FALLBACK="# Full Alignment Review (Round {{CURRENT_ROUND}})
 
@@ -1114,6 +1235,7 @@ else
         "PROMPT_FILE=$PROMPT_FILE" \
         "SUMMARY_CONTENT=$SUMMARY_CONTENT" \
         "GOAL_TRACKER_FILE=$GOAL_TRACKER_FILE" \
+        "GOAL_TRACKER_READ_INSTRUCTION=$GOAL_TRACKER_READ_INSTRUCTION" \
         "DOCS_PATH=$DOCS_PATH" \
         "GOAL_TRACKER_UPDATE_SECTION=$GOAL_TRACKER_UPDATE_SECTION" \
         "COMMIT_HISTORY_SECTION=$COMMIT_HISTORY_SECTION" \
@@ -1167,20 +1289,39 @@ mkdir -p "$CACHE_DIR"
 # portable-timeout.sh already sourced above
 
 # Disable native hooks for nested Codex reviewer calls to prevent Stop-hook recursion.
-# Probe whether the installed Codex CLI supports --disable; cache the result per loop
-# so older builds do not fail with an unknown-argument error.
+# Codex has used different hook feature names across releases. Probe each name
+# before disabling it so older CLIs that validate feature names still work.
 CODEX_DISABLE_HOOKS_ARGS=()
-_CODEX_FEATURE_CACHE="$CACHE_DIR/.codex-disable-hooks-supported"
+_CODEX_FEATURE_CACHE="$CACHE_DIR/.codex-disable-hooks-features"
 if [[ -f "$_CODEX_FEATURE_CACHE" ]]; then
-    [[ "$(cat "$_CODEX_FEATURE_CACHE")" == "yes" ]] && CODEX_DISABLE_HOOKS_ARGS=(--disable codex_hooks)
-elif codex --help 2>&1 | grep -q -- '--disable'; then
-    CODEX_DISABLE_HOOKS_ARGS=(--disable codex_hooks)
-    echo "yes" > "$_CODEX_FEATURE_CACHE" 2>/dev/null
+    while IFS= read -r feature_name; do
+        case "$feature_name" in
+            hooks|plugin_hooks|codex_hooks)
+                CODEX_DISABLE_HOOKS_ARGS+=("--disable" "$feature_name")
+                ;;
+        esac
+    done < "$_CODEX_FEATURE_CACHE"
 else
-    echo "no" > "$_CODEX_FEATURE_CACHE" 2>/dev/null
+    CODEX_HELP_OUTPUT="$(codex --help </dev/null 2>&1 || true)"
+    if grep -q -- '--disable' <<< "$CODEX_HELP_OUTPUT"; then
+        _CODEX_DISABLE_HOOK_FEATURES=()
+        for feature_name in hooks plugin_hooks codex_hooks; do
+            if codex --disable "$feature_name" --help </dev/null >/dev/null 2>&1; then
+                CODEX_DISABLE_HOOKS_ARGS+=("--disable" "$feature_name")
+                _CODEX_DISABLE_HOOK_FEATURES+=("$feature_name")
+            fi
+        done
+        printf '%s\n' ${_CODEX_DISABLE_HOOK_FEATURES[@]+"${_CODEX_DISABLE_HOOK_FEATURES[@]}"} > "$_CODEX_FEATURE_CACHE" 2>/dev/null || true
+    else
+        : > "$_CODEX_FEATURE_CACHE" 2>/dev/null || true
+    fi
 fi
 
 # Build command arguments for summary review (codex exec)
+CODEX_PROFILE_ARGS=()
+if [[ -n "$CODEX_EXEC_PROFILE" ]]; then
+    CODEX_PROFILE_ARGS=("-p" "$CODEX_EXEC_PROFILE")
+fi
 CODEX_EXEC_ARGS=("-m" "$CODEX_EXEC_MODEL")
 if [[ -n "$CODEX_EXEC_EFFORT" ]]; then
     CODEX_EXEC_ARGS+=("-c" "model_reasoning_effort=${CODEX_EXEC_EFFORT}")
@@ -1228,6 +1369,8 @@ run_codex_code_review() {
     local prompt_fallback="# Code Review Phase - Round ${round}
 
 This file documents the code review invocation for audit purposes.
+Compatibility note: Codex 0.130.0 rejects [PROMPT] input, including - stdin, when --base is used.
+Humanize must not pass prompt input when --base is used; this file is audit-only.
 Provider: codex
 
 ## Review Configuration
@@ -1256,14 +1399,14 @@ Provider: codex
         echo "# Review base ($review_base_type): $review_base"
         echo "# Timeout: $CODEX_TIMEOUT seconds"
         echo ""
-        echo "codex review ${CODEX_DISABLE_HOOKS_ARGS[*]} --base $review_base ${CODEX_REVIEW_ARGS[*]}"
+        echo "codex ${CODEX_DISABLE_HOOKS_ARGS[*]+"${CODEX_DISABLE_HOOKS_ARGS[*]}"} ${CODEX_PROFILE_ARGS[*]} review --base $review_base ${CODEX_REVIEW_ARGS[*]}"
     } > "$CODEX_REVIEW_CMD_FILE"
 
     echo "Code review command saved to: $CODEX_REVIEW_CMD_FILE" >&2
     echo "Running codex review with timeout ${CODEX_TIMEOUT}s in $PROJECT_ROOT (base: $review_base)..." >&2
 
     CODEX_REVIEW_EXIT_CODE=0
-    (cd "$PROJECT_ROOT" && run_with_timeout "$CODEX_TIMEOUT" codex review "${CODEX_DISABLE_HOOKS_ARGS[@]}" --base "$review_base" "${CODEX_REVIEW_ARGS[@]}") \
+    (cd "$PROJECT_ROOT" && run_with_timeout "$CODEX_TIMEOUT" codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_PROFILE_ARGS[@]}" review --base "$review_base" "${CODEX_REVIEW_ARGS[@]}") \
         > "$CODEX_REVIEW_LOG_FILE" 2>&1 || CODEX_REVIEW_EXIT_CODE=$?
 
     echo "Code review exit code: $CODEX_REVIEW_EXIT_CODE" >&2
@@ -1443,6 +1586,7 @@ This loop should not continue automatically. Revisit the original plan, recover 
         "LAST_VERDICT=$last_verdict" \
         "PLAN_FILE=$PLAN_FILE")
 
+    kernel_finish_delivery stop
     end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_STOP"
 
     jq -n \
@@ -1682,7 +1826,7 @@ CODEX_PROMPT_CONTENT=$(cat "$REVIEW_PROMPT_FILE")
     echo "# Working directory: $PROJECT_ROOT"
     echo "# Timeout: $CODEX_TIMEOUT seconds"
     echo ""
-    echo "codex exec ${CODEX_DISABLE_HOOKS_ARGS[*]} ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
+    echo "codex ${CODEX_DISABLE_HOOKS_ARGS[*]+"${CODEX_DISABLE_HOOKS_ARGS[*]}"} ${CODEX_PROFILE_ARGS[*]} exec ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
     echo ""
     echo "# Prompt content:"
     echo "$CODEX_PROMPT_CONTENT"
@@ -1692,7 +1836,7 @@ echo "Codex command saved to: $CODEX_CMD_FILE" >&2
 echo "Running summary review with timeout ${CODEX_TIMEOUT}s..." >&2
 
 CODEX_EXIT_CODE=0
-printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$CODEX_TIMEOUT" codex exec "${CODEX_DISABLE_HOOKS_ARGS[@]}" "${CODEX_EXEC_ARGS[@]}" - \
+printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$CODEX_TIMEOUT" codex ${CODEX_DISABLE_HOOKS_ARGS[@]+"${CODEX_DISABLE_HOOKS_ARGS[@]}"} "${CODEX_PROFILE_ARGS[@]}" exec "${CODEX_EXEC_ARGS[@]}" - \
     > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
 
 echo "Codex exit code: $CODEX_EXIT_CODE" >&2
@@ -1837,13 +1981,13 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
         "$MAINLINE_VERDICT_STALLED"|"$MAINLINE_VERDICT_REGRESSED")
             NEXT_MAINLINE_STALL_COUNT=$((MAINLINE_STALL_COUNT + 1))
             NEXT_LAST_MAINLINE_VERDICT="$EXTRACTED_MAINLINE_VERDICT"
-            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 2 ]]; then
+            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 8 ]]; then
                 NEXT_DRIFT_STATUS="$DRIFT_STATUS_REPLAN_REQUIRED"
                 DRIFT_REPLAN_REQUIRED=true
             else
                 NEXT_DRIFT_STATUS="$DRIFT_STATUS_NORMAL"
             fi
-            if [[ "$NEXT_MAINLINE_STALL_COUNT" -ge 3 ]]; then
+            if [[ "$NEXT_MAINLINE_STALL_COUNT" -gt 10 ]]; then
                 MAINLINE_DRIFT_STOP=true
             fi
             ;;
@@ -1861,6 +2005,17 @@ if [[ "$REVIEW_STARTED" != "true" ]]; then
     fi
 fi
 
+# Record actual optimization review completion in the original loop state.
+# Pre-created summaries and multiple benchmark calls are not completed rounds.
+if [[ "$REVIEW_STARTED" != "true" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+    CONFIRMED_ROUNDS=$(sed -n 's/^completed_optimization_rounds:[[:space:]]*//p' "$STATE_FILE" | head -n 1)
+    if [[ "$CURRENT_ROUND" -eq 0 && -z "$CONFIRMED_ROUNDS" ]] || \
+       [[ "$CONFIRMED_ROUNDS" == "$CURRENT_ROUND" || "$CONFIRMED_ROUNDS" == "$NEXT_ROUND" ]]; then
+        upsert_state_fields "$STATE_FILE" "completed_optimization_rounds=${NEXT_ROUND}"
+    fi
+fi
+
 # Handle COMPLETE - enter Review Phase or Finalize Phase
 if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
     # In review phase, COMPLETE signal is ignored - only absence of [P0-9] triggers finalize
@@ -1872,6 +2027,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
         # Max iterations check
         if [[ $CURRENT_ROUND -ge $MAX_ITERATIONS ]]; then
             echo "Codex review passed but at max iterations ($MAX_ITERATIONS). Terminating as MAXITER." >&2
+            kernel_finish_delivery maxiter
             if enter_methodology_analysis_phase "maxiter" "Codex confirmed COMPLETE but at max iterations ($MAX_ITERATIONS)"; then
                 exit 0
             fi
@@ -1976,6 +2132,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_STOP" ]]; then
     fi
     echo "========================================" >&2
     # Try to enter methodology analysis phase before final exit
+    kernel_finish_delivery stop
     if enter_methodology_analysis_phase "stop" "Circuit breaker triggered - stagnation detected at round $CURRENT_ROUND"; then
         exit 0
     fi
@@ -1986,6 +2143,18 @@ fi
 # ========================================
 # Review Found Issues - Continue Loop
 # ========================================
+
+# Rounds are zero-based: after reviewing N-1, N rounds have been consumed.
+# Finish here instead of publishing an extra round-N optimization prompt.
+if [[ "$REVIEW_STARTED" != "true" && "$NEXT_ROUND" -ge "$MAX_ITERATIONS" ]] && \
+   [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+    kernel_finish_delivery maxiter
+    if enter_methodology_analysis_phase "maxiter" "Reached optimization round budget ($MAX_ITERATIONS)"; then
+        exit 0
+    fi
+    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_MAXITER"
+    exit 0
+fi
 
 # Update state file for next round
 upsert_state_fields "$STATE_FILE" \
@@ -2018,6 +2187,10 @@ if [[ ! -f "$NEXT_SUMMARY_FILE" ]]; then
 - Lesson ID(s): NONE
 - Notes: [what changed and why]
 EOF
+    if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+        source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
+        kernaut_append_handoff_template "$NEXT_SUMMARY_FILE" "$LOOP_DIR" "$NEXT_ROUND"
+    fi
 fi
 NEXT_CONTRACT_FILE="$LOOP_DIR/round-${NEXT_ROUND}-contract.md"
 
@@ -2208,14 +2381,68 @@ if [[ "$DRIFT_REPLAN_REQUIRED" == "true" ]]; then
     SYSTEM_MSG="Loop: Round $NEXT_ROUND/$MAX_ITERATIONS - Mainline drift detected, replan required"
 fi
 
-# Block exit and send review feedback
+# Only this normal post-review transition is a completed workflow boundary.
+# Error blocks, repeated review/finalization and terminal paths exit above.
+STAGE_BOUNDARY="null"
+# KOP and Kernaut share decision guidance. Native stage metadata is emitted
+# only when kernaut_stage_boundary sees KERNELCLI_STAGE_COMPACTION=1.
+if [[ -n "${KERNELCLI_STAGE_COMPACTION+x}" || -f "$PROJECT_ROOT/.pipeline/state.json" ]]; then
+    source "$SCRIPT_DIR/lib/kernaut-handoff.sh"
+    STAGE_BOUNDARY=$(kernaut_stage_boundary "$LOOP_DIR" "$CURRENT_ROUND" "$SUMMARY_FILE" "$REVIEW_RESULT_FILE" "$PROJECT_ROOT")
+    STAGE_BOUNDARY="${STAGE_BOUNDARY:-null}"
+    cat >> "$NEXT_PROMPT_FILE" << EOF
+
+## Latest experiment evidence
+- Latest summary: @$SUMMARY_FILE
+- Latest review: @$REVIEW_RESULT_FILE
+- Stop-gate full benchmark record: @$BENCHMARK_RESULT_FILE
+- Full benchmark log: @$BENCHMARK_LOG_FILE
+
+Read the latest conclusion and unresolved issues first, then follow these
+existing reports and any candidate-specific references saved in the summary.
+Read older history for a concrete unresolved question. These paths identify
+recorded attempts, not certification of the current source: verify candidate,
+configuration and case/device scope before treating results as current/full.
+EOF
+    cat >> "$NEXT_PROMPT_FILE" << 'KERNAUT_HANDOFF_EOF'
+
+## Optimization handoff
+Before editing, read the contract, goal tracker, latest summary/review and saved
+validation receipts. Recover current and best valid candidates separately, with
+source hashes/Git versions, complete correctness/device coverage, geometric and
+minimum per-case speedups, failed cases, unresolved review actions and next
+hypothesis. Missing measurements remain unknown. Preserve the existing loop and
+remaining round budget. Keep these facts and evidence paths in this round's
+summary; use short records and read detailed logs only when needed.
+Connect the chosen hypothesis and actual change to its candidate/report and
+scope, observed outcome and next decision. Keep meaningful counterexamples;
+related small debugging steps can be summarized together. Planned work is not
+measured evidence, partial improvements are not full results, and missing data
+or infrastructure failures do not refute an algorithm. Use the existing
+evaluation entry points; multiple evaluations do not consume extra rounds.
+Choose tuning or a structural change from the evidence, not a fixed round count.
+
+## Knowledge decision
+Reuse saved task facts and method IDs/sections. Update facts only for changed
+semantics/workloads or new observations; mark missing conditions unknown. Route
+directly to the current operator family, API/pitfall or hardware technique.
+For a few relevant methods, record condition evidence, missing conditions and
+keep/reject reasons in the summary. Separate method exposure from selection.
+Once an actionable experiment or a specific condition check/probe is defined,
+save that decision and end retrieval. Another query needs a named unresolved
+question that would change the choice; navigation does not require a BM25 retry.
+Resolve missing task facts from current materials. Preserve the decision before
+budget exhaustion; do not keep expanding references. Reuse it after compact.
+Read historical code only for the selected method and required implementation.
+KERNAUT_HANDOFF_EOF
+fi
+
+# Block exit and send review feedback. Metadata is not model-visible context.
 jq -n \
     --arg reason "$(cat "$NEXT_PROMPT_FILE")" \
     --arg msg "$SYSTEM_MSG" \
-    '{
-        "decision": "block",
-        "reason": $reason,
-        "systemMessage": $msg
-    }'
+    --argjson stageBoundary "$STAGE_BOUNDARY" \
+    '{decision: "block", reason: $reason, systemMessage: $msg}
+     + (if $stageBoundary == null then {} else {stageBoundary: $stageBoundary} end)'
 
 exit 0
