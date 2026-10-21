@@ -90,9 +90,18 @@ def run(args):
         value["status"] = "running"
         receipt(result, args.round, command, value)
         try:
-            code = process.wait(timeout=args.timeout)
+            deadline = time.monotonic() + args.timeout
+            while True:
+                if getattr(args, "cancelled", lambda: False)():
+                    raise InterruptedError("Harness stopped this measurement")
+                try:
+                    code = process.wait(timeout=max(0.01, min(1, deadline - time.monotonic())))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
             value["status"] = "passed" if code == 0 else "failed"
-        except subprocess.TimeoutExpired:
+        except (subprocess.TimeoutExpired, InterruptedError, KeyboardInterrupt) as exc:
             try:
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
@@ -106,7 +115,8 @@ def run(args):
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            code, value["status"] = 124, "timeout"
+            code, value["status"] = ((124, "timeout") if isinstance(exc, subprocess.TimeoutExpired)
+                                     else (130, "interrupted"))
     value.update(exit_code=code, finished_at=time.time(), source_stable=equivalent(before, identity(root)))
     matches = re.findall(r"^Full evaluation report: (.+)$", log.read_text(errors="replace"), re.M)
     for name in reversed(matches):
