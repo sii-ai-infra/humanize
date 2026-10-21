@@ -45,9 +45,9 @@ def git(root, *args):
     return subprocess.check_output(["git", "-C", str(root), *args], stderr=subprocess.PIPE)
 
 
-def scopes(root):
+def scopes(root, configured=None):
     state = root / ".pipeline/state.json"
-    paths = read_json(state).get("candidate_paths", ["solution"]) if state.exists() else ["solution"]
+    paths = configured if configured is not None else (read_json(state).get("candidate_paths", ["solution"]) if state.exists() else ["solution"])
     if not isinstance(paths, list) or not paths or "solution" not in paths:
         raise ValueError("candidate_paths must include solution")
     for name in paths:
@@ -90,14 +90,20 @@ def commit_files(root, commit, paths):
     return result
 
 
-def identity(root):
+def identity(root, candidate_paths=None):
     root = root.resolve()
-    paths = scopes(root)
+    paths = scopes(root, candidate_paths)
     candidate = files(root, paths)
     if not candidate:
         raise ValueError("No candidate source files")
     config_paths = ["baseline", "bench", "contract.md", "prompt.md", "shapes.yaml", "docs/optimization-objective.md"]
-    loops = sorted((root / ".humanize/rlcr").glob("*/benchmark-command.sh"))
+    state_path = root / ".pipeline/state.json"
+    run = read_json(state_path).get("optimization_run", {}) if state_path.exists() else {}
+    active_loop = (root / run["directory"]).resolve() if run.get("directory") else None
+    if active_loop and active_loop.is_relative_to((root / ".humanize/rlcr").resolve()):
+        loops = [active_loop / "benchmark-command.sh"] if (active_loop / "benchmark-command.sh").exists() else []
+    else:
+        loops = sorted((root / ".humanize/rlcr").glob("*/benchmark-command.sh"))
     if loops:
         config_paths.extend([loops[-1].relative_to(root).as_posix(), loops[-1].with_name("benchmark-timeout").relative_to(root).as_posix()])
     config = files(root, config_paths)
