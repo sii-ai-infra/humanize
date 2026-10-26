@@ -52,6 +52,7 @@ source "$PLUGIN_ROOT/scripts/portable-timeout.sh"
 
 # Source methodology analysis library
 source "$SCRIPT_DIR/lib/methodology-analysis.sh"
+source "$SCRIPT_DIR/lib/managed-completion.sh"
 
 # Default timeout for git operations (30 seconds)
 GIT_TIMEOUT=30
@@ -663,6 +664,9 @@ Please commit all changes before allowing the loop to exit.
         # Analysis complete and tree clean. Now do the terminal rename so the
         # active state file stays in place until this cleanliness gate passes.
         _meth_exit_reason=$(cat "$LOOP_DIR/.methodology-exit-reason" 2>/dev/null | tr -d '[:space:]' || echo "")
+        if [[ "$_meth_exit_reason" == "complete" ]]; then
+            managed_completion_validation || exit 0
+        fi
         if [[ -n "$_meth_exit_reason" ]]; then
             mv "$LOOP_DIR/methodology-analysis-state.md" "$LOOP_DIR/${_meth_exit_reason}-state.md" 2>/dev/null || true
             rm -f "$LOOP_DIR/.methodology-exit-reason"
@@ -992,6 +996,7 @@ fi
 # No Codex review is performed - this is the final step after Codex already confirmed COMPLETE
 
 if [[ "$IS_FINALIZE_PHASE" == "true" ]]; then
+    managed_completion_validation || exit 0
     echo "Finalize Phase complete. All checks passed." >&2
     # Try to enter methodology analysis phase before final exit
     if enter_methodology_analysis_phase "complete" "All acceptance criteria met and code review passed"; then
@@ -1052,6 +1057,24 @@ if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
         --round "$CURRENT_ROUND" \
         --command-file "$BENCHMARK_COMMAND_FILE" \
         --timeout "$BENCHMARK_TIMEOUT"
+
+    # Platform failure belongs to the fixed runtime broker, not to candidate
+    # quality. Keep this native round and its budget; never infer classification
+    # by parsing stderr or by asking the user to waive a hardware check.
+    if [[ "${HUMANIZE_MANAGED_RELIABILITY_V1:-}" == "1" ]]; then
+        if [[ -z "${HUMANIZE_ROUND_STATUS:-}" ]] || ! _managed_round=$("$HUMANIZE_ROUND_STATUS") || ! jq -e '(.decision=="continue" or .decision=="platform_blocked" or .decision=="reference_blocked") and (.reason|type=="string")' <<<"$_managed_round" >/dev/null; then
+            jq -n '{decision:"block",reason:"The original round execution status is unknown. Preserve all records for platform diagnosis; do not repeat the benchmark.",systemMessage:"Round status requires platform recovery",platform_blocked:true}'
+            exit 0
+        fi
+        if [[ $(jq -r .decision <<<"$_managed_round") == "reference_blocked" ]]; then
+            jq -n --arg reason "$(jq -r .reason <<<"$_managed_round")" '{decision:"block",reason:$reason,systemMessage:"Reference compatibility needs repair; optimization budget is unchanged",reference_blocked:true}'
+            exit 0
+        fi
+        if [[ $(jq -r .decision <<<"$_managed_round") == "platform_blocked" ]]; then
+            jq -n --arg reason "$(jq -r .reason <<<"$_managed_round")" '{decision:"block",reason:$reason,systemMessage:"Platform is blocked; optimization budget is unchanged",platform_blocked:true}'
+            exit 0
+        fi
+    fi
 
     if [[ ! -s "$BENCHMARK_RESULT_FILE" || ! -f "$BENCHMARK_LOG_FILE" ]]; then
         jq -n \
