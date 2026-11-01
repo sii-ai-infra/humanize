@@ -56,7 +56,7 @@ USAGE:
 
 OPTIONS:
   --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort (default from config, fallback gpt-5.5:high)
+                       Codex model and reasoning effort (inherits Kernaut runtime, fallback kernaut-default:high)
   --codex-profile <PROFILE>
                        Codex config profile to pass as `codex -p PROFILE`
   --codex-timeout <SECONDS>
@@ -71,7 +71,7 @@ DESCRIPTION:
 
 EXAMPLES:
   /humanize:ask-codex How should I structure the authentication module?
-  /humanize:ask-codex --codex-model gpt-5.5:high What are the performance bottlenecks?
+  /humanize:ask-codex --codex-model kernaut-default:high What are the performance bottlenecks?
   /humanize:ask-codex --codex-timeout 300 Review the error handling in src/api/
 
 ENVIRONMENT:

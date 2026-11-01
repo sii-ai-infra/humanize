@@ -70,6 +70,7 @@ cat > /dev/null
 exit "${MOCK_CODEX_EXIT_CODE:-0}"
 MOCK_EOF
 chmod +x "$MOCK_BIN_DIR/codex"
+ln -s "$MOCK_BIN_DIR/codex" "$MOCK_BIN_DIR/kernaut"
 
 # Export mock variables so child processes (the mock codex) can see them
 export MOCK_CODEX_EXIT_CODE=""
@@ -613,6 +614,7 @@ cat > /dev/null
 exit "${MOCK_CODEX_EXIT_CODE:-0}"
 PROBE_MOCK_SUPPORTS
 chmod +x "$PROBE_BIN_DIR/codex"
+ln -s "$PROBE_BIN_DIR/codex" "$PROBE_BIN_DIR/kernaut"
 
 reset_mock
 export MOCK_CODEX_STDOUT="probe-test-supports"
@@ -653,6 +655,7 @@ cat > /dev/null
 exit "${MOCK_CODEX_EXIT_CODE:-0}"
 PROBE_MOCK_NO_SUPPORT
 chmod +x "$PROBE_BIN_NO_DIR/codex"
+ln -s "$PROBE_BIN_NO_DIR/codex" "$PROBE_BIN_NO_DIR/kernaut"
 
 run_ask_codex_probe_no() {
     (
@@ -693,5 +696,21 @@ fi
 # ========================================
 # Summary
 # ========================================
+
+reset_mock
+export MOCK_CODEX_ARGS_FILE="$TEST_DIR/runtime-model.args"
+export MOCK_CODEX_STDOUT="runtime inheritance fixture response"
+KOP_MODEL=default-pro KOP_REASONING_EFFORT=medium run_ask_codex "runtime inheritance fixture" > /dev/null 2>&1
+if grep -qx 'default-pro' "$MOCK_CODEX_ARGS_FILE" && grep -qx 'model_reasoning_effort=medium' "$MOCK_CODEX_ARGS_FILE"; then
+    pass "planning inherits effective runtime model and effort"
+else
+    fail "planning inherits effective runtime model and effort" "default-pro / medium" "wrong runtime args"
+fi
+KOP_MODEL=default-pro run_ask_codex --codex-model default-flash:high "explicit override fixture" > /dev/null 2>&1
+if grep -qx 'default-flash' "$MOCK_CODEX_ARGS_FILE"; then
+    pass "explicit planning model override wins over inherited model"
+else
+    fail "explicit planning model override wins over inherited model" "default-flash" "wrong runtime args"
+fi
 
 print_test_summary "Ask Codex Test Summary"
