@@ -29,13 +29,13 @@ fi
 setup_test_dir
 
 FAKE_BIN="$TEST_DIR/bin"
-CODEX_HOME_DIR="$TEST_DIR/codex-home"
-HOOKS_FILE="$CODEX_HOME_DIR/hooks.json"
+KERNELCLI_HOME_DIR="$TEST_DIR/codex-home"
+HOOKS_FILE="$KERNELCLI_HOME_DIR/hooks.json"
 FEATURE_LOG="$TEST_DIR/codex-features.log"
 XDG_CONFIG_HOME_DIR="$TEST_DIR/xdg-config"
 HUMANIZE_USER_CONFIG="$XDG_CONFIG_HOME_DIR/humanize/config.json"
 COMMAND_BIN_DIR="$TEST_DIR/command-bin"
-mkdir -p "$FAKE_BIN" "$CODEX_HOME_DIR" "$COMMAND_BIN_DIR"
+mkdir -p "$FAKE_BIN" "$KERNELCLI_HOME_DIR" "$COMMAND_BIN_DIR"
 
 cat > "$FAKE_BIN/codex" <<'EOF'
 #!/usr/bin/env bash
@@ -60,9 +60,9 @@ LIST
 fi
 
 if [[ "${1:-}" == "features" && "${2:-}" == "enable" && "${3:-}" == "hooks" ]]; then
-    printf 'CODEX_HOME=%s\n' "${CODEX_HOME:-}" >> "${TEST_CODEX_FEATURE_LOG:?}"
-    mkdir -p "${CODEX_HOME:?}"
-    : > "${CODEX_HOME}/.hooks-enabled"
+    printf 'KERNELCLI_HOME=%s\n' "${KERNELCLI_HOME:-}" >> "${TEST_CODEX_FEATURE_LOG:?}"
+    mkdir -p "${KERNELCLI_HOME:?}"
+    : > "${KERNELCLI_HOME}/.hooks-enabled"
     exit 0
 fi
 
@@ -121,18 +121,18 @@ EOF
 PATH="$FAKE_BIN:$PATH" TEST_CODEX_FEATURE_LOG="$FEATURE_LOG" XDG_CONFIG_HOME="$XDG_CONFIG_HOME_DIR" \
     "$INSTALL_SCRIPT" \
     --target codex \
-    --codex-config-dir "$CODEX_HOME_DIR" \
-    --codex-skills-dir "$CODEX_HOME_DIR/skills" \
+    --codex-config-dir "$KERNELCLI_HOME_DIR" \
+    --codex-skills-dir "$KERNELCLI_HOME_DIR/skills" \
     --command-bin-dir "$COMMAND_BIN_DIR" \
     > "$TEST_DIR/install.log" 2>&1
 
-if [[ -f "$CODEX_HOME_DIR/skills/humanize/SKILL.md" ]]; then
+if [[ -f "$KERNELCLI_HOME_DIR/skills/humanize/SKILL.md" ]]; then
     pass "Codex install syncs Humanize skill bundle"
 else
     fail "Codex install syncs Humanize skill bundle" "skills/humanize/SKILL.md exists" "missing"
 fi
 
-if [[ -f "$CODEX_HOME_DIR/skills/humanize-rlcr/SKILL.md" ]]; then
+if [[ -f "$KERNELCLI_HOME_DIR/skills/humanize-rlcr/SKILL.md" ]]; then
     pass "Codex install keeps humanize-rlcr entrypoint skill"
 else
     fail "Codex install keeps humanize-rlcr entrypoint skill" "skills/humanize-rlcr/SKILL.md exists" "missing"
@@ -144,7 +144,7 @@ else
     fail "Codex install writes hooks.json" "$HOOKS_FILE exists" "missing"
 fi
 
-if [[ -f "$CODEX_HOME_DIR/.hooks-enabled" ]]; then
+if [[ -f "$KERNELCLI_HOME_DIR/.hooks-enabled" ]]; then
     pass "Codex install enables hooks feature"
 else
     fail "Codex install enables hooks feature" ".hooks-enabled marker exists" "missing"
@@ -176,7 +176,7 @@ else
         "codex-only" "$(jq -c '.' "$HUMANIZE_USER_CONFIG" 2>/dev/null || echo MISSING)"
 fi
 
-runtime_root="$CODEX_HOME_DIR/skills/humanize"
+runtime_root="$KERNELCLI_HOME_DIR/skills/humanize"
 PY_OUTPUT="$(
     python3 - "$HOOKS_FILE" "$runtime_root" <<'PY'
 import json
@@ -262,8 +262,8 @@ fi
 PATH="$FAKE_BIN:$PATH" TEST_CODEX_FEATURE_LOG="$FEATURE_LOG" XDG_CONFIG_HOME="$XDG_CONFIG_HOME_DIR" \
     "$INSTALL_SCRIPT" \
     --target codex \
-    --codex-config-dir "$CODEX_HOME_DIR" \
-    --codex-skills-dir "$CODEX_HOME_DIR/skills" \
+    --codex-config-dir "$KERNELCLI_HOME_DIR" \
+    --codex-skills-dir "$KERNELCLI_HOME_DIR/skills" \
     --command-bin-dir "$COMMAND_BIN_DIR" \
     > "$TEST_DIR/install-2.log" 2>&1
 
@@ -534,19 +534,19 @@ fi
 # install_codex_user_config(), so provider_mode: "codex-only" was never written
 # for mixed Codex+Kimi installs.
 
-BOTH_CODEX_HOME="$TEST_DIR/both-codex-home"
+BOTH_KERNELCLI_HOME="$TEST_DIR/both-codex-home"
 BOTH_KIMI_SKILLS="$TEST_DIR/both-kimi-skills"
 BOTH_XDG_CONFIG="$TEST_DIR/both-xdg-config"
 BOTH_USER_CONFIG="$BOTH_XDG_CONFIG/humanize/config.json"
-mkdir -p "$BOTH_CODEX_HOME" "$BOTH_KIMI_SKILLS"
+mkdir -p "$BOTH_KERNELCLI_HOME" "$BOTH_KIMI_SKILLS"
 
 PATH="$FAKE_BIN:$PATH" TEST_CODEX_FEATURE_LOG="$TEST_DIR/feature-log-both.log" \
     XDG_CONFIG_HOME="$BOTH_XDG_CONFIG" \
     HUMANIZE_USER_CONFIG_DIR="$BOTH_XDG_CONFIG/humanize" \
     "$INSTALL_SCRIPT" \
     --target both \
-    --codex-config-dir "$BOTH_CODEX_HOME" \
-    --codex-skills-dir "$BOTH_CODEX_HOME/skills" \
+    --codex-config-dir "$BOTH_KERNELCLI_HOME" \
+    --codex-skills-dir "$BOTH_KERNELCLI_HOME/skills" \
     --kimi-skills-dir "$BOTH_KIMI_SKILLS" \
     --command-bin-dir "$COMMAND_BIN_DIR" \
     > "$TEST_DIR/install-both.log" 2>&1
@@ -566,16 +566,16 @@ fi
 SHARED_DIR="$TEST_DIR/shared-skills"
 mkdir -p "$SHARED_DIR"
 
-SHARED_CODEX_HOME="$TEST_DIR/shared-codex-home"
+SHARED_KERNELCLI_HOME="$TEST_DIR/shared-codex-home"
 SHARED_XDG_CONFIG="$TEST_DIR/shared-xdg-config"
-mkdir -p "$SHARED_CODEX_HOME"
+mkdir -p "$SHARED_KERNELCLI_HOME"
 
 set +e
 PATH="$FAKE_BIN:$PATH" TEST_CODEX_FEATURE_LOG="$TEST_DIR/feature-log-shared.log" \
     XDG_CONFIG_HOME="$SHARED_XDG_CONFIG" \
     "$INSTALL_SCRIPT" \
     --target both \
-    --codex-config-dir "$SHARED_CODEX_HOME" \
+    --codex-config-dir "$SHARED_KERNELCLI_HOME" \
     --codex-skills-dir "$SHARED_DIR" \
     --kimi-skills-dir "$SHARED_DIR" \
     --command-bin-dir "$COMMAND_BIN_DIR" \

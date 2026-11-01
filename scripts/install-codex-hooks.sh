@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# Install/update Humanize native Codex hooks in CODEX_HOME/hooks.json.
+# Install/update Humanize native Codex hooks in KERNELCLI_HOME/hooks.json.
 #
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-CODEX_CONFIG_DIR="${CODEX_HOME:-${HOME}/.codex}"
+CODEX_CONFIG_DIR="${KERNELCLI_HOME:-${HOME}/.kernaut}"
 RUNTIME_ROOT="$CODEX_CONFIG_DIR/skills/humanize"
 DRY_RUN="false"
 ENABLE_FEATURE="true"
@@ -22,7 +22,7 @@ Usage:
   scripts/install-codex-hooks.sh [options]
 
 Options:
-  --codex-config-dir PATH  Codex config dir (default: ${CODEX_HOME:-~/.codex})
+  --codex-config-dir PATH  Codex config dir (default: ${KERNELCLI_HOME:-~/.kernaut})
   --runtime-root PATH      Installed Humanize runtime root (default: <codex-config-dir>/skills/humanize)
   --skip-enable-feature    Do not run `codex features enable hooks`
   --dry-run                Print actions without writing
@@ -82,7 +82,7 @@ config_uses_legacy_codex_hooks() {
 }
 
 require_native_hooks_support() {
-    if ! command -v codex >/dev/null 2>&1; then
+    if ! command -v "${KOP_CODEX_BINARY:-kernaut}" >/dev/null 2>&1; then
         die "Codex CLI with native hooks support is required. Install Codex 0.114.0+ first."
     fi
 
@@ -93,13 +93,13 @@ require_native_hooks_support() {
     local features
     local line
     local codex_help
-    features="$(CODEX_HOME="$CODEX_CONFIG_DIR" codex features list 2>/dev/null)" || {
+    features="$(KERNELCLI_HOME="$CODEX_CONFIG_DIR" "${KOP_CODEX_BINARY:-kernaut}" features list 2>/dev/null)" || {
         die "failed to inspect Codex features. Humanize Codex install requires the native 'hooks' feature."
     }
 
     line="$(printf '%s\n' "$features" | awk '$1 == "hooks" { print; exit }')"
     if [[ -n "$line" ]]; then
-        codex_help="$(codex --help 2>&1)" || {
+        codex_help="$("${KOP_CODEX_BINARY:-kernaut}" --help 2>&1)" || {
             die "failed to inspect Codex help output. Humanize Codex install requires the --disable flag."
         }
         if ! grep -q -- '--disable' <<< "$codex_help"; then
@@ -216,7 +216,7 @@ enable_feature() {
         return 0
     fi
 
-    if CODEX_HOME="$config_dir" codex features enable hooks >/dev/null 2>&1; then
+    if KERNELCLI_HOME="$config_dir" "${KOP_CODEX_BINARY:-kernaut}" features enable hooks >/dev/null 2>&1; then
         log "enabled hooks feature in $config_dir/config.toml"
     else
         die "failed to enable hooks feature automatically in $config_dir/config.toml"
