@@ -226,6 +226,11 @@ def load_candidate(root, ref):
         raw_path.relative_to(root / ".humanize")
         if hashlib.sha256(raw_path.read_bytes()).hexdigest() != evidence["sha256"]:
             raise ValueError("External evaluator evidence changed")
+        for name, expected in evidence.get("artifacts", {}).items():
+            evidence_path = (root / name).resolve()
+            evidence_path.relative_to(root / ".humanize")
+            if hashlib.sha256(evidence_path.read_bytes()).hexdigest() != expected:
+                raise ValueError(f"External evaluator artifact changed: {name}")
         for name, expected in evidence.get("inputs", {}).items():
             if hashlib.sha256((root / name).read_bytes()).hexdigest() != expected:
                 raise ValueError("Fixed external evaluator input changed")
