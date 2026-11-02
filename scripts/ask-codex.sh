@@ -56,7 +56,7 @@ USAGE:
 
 OPTIONS:
   --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort (default from config, fallback gpt-5.5:high)
+                       Codex model and reasoning effort (inherits Kernaut runtime, fallback kernaut-default:high)
   --codex-profile <PROFILE>
                        Codex config profile to pass as `codex -p PROFILE`
   --codex-timeout <SECONDS>
@@ -71,7 +71,7 @@ DESCRIPTION:
 
 EXAMPLES:
   /humanize:ask-codex How should I structure the authentication module?
-  /humanize:ask-codex --codex-model gpt-5.5:high What are the performance bottlenecks?
+  /humanize:ask-codex --codex-model kernaut-default:high What are the performance bottlenecks?
   /humanize:ask-codex --codex-timeout 300 Review the error handling in src/api/
 
 ENVIRONMENT:
@@ -161,12 +161,11 @@ QUESTION="${QUESTION_PARTS[*]+"${QUESTION_PARTS[*]}"}"
 # Validate Prerequisites
 # ========================================
 
-# Check codex is available
-if ! command -v codex &>/dev/null; then
-    echo "Error: 'codex' command is not installed or not in PATH" >&2
-    echo "" >&2
-    echo "Please install Codex CLI: https://github.com/openai/codex" >&2
-    echo "Then retry: /humanize:ask-codex <your question>" >&2
+# Resolve the active Kernaut binary without depending on a separate Codex install.
+KERNAUT_BINARY="${KOP_CODEX_BINARY:-kernaut}"
+if ! command -v "$KERNAUT_BINARY" &>/dev/null; then
+    echo "Error: Kernaut executable is unavailable: $KERNAUT_BINARY" >&2
+    echo "Install Kernaut or provide KOP_CODEX_BINARY, then retry." >&2
     exit 1
 fi
 
@@ -265,11 +264,11 @@ if [[ -f "$_CODEX_DISABLE_HOOKS_CACHE" ]]; then
         esac
     done < "$_CODEX_DISABLE_HOOKS_CACHE"
 else
-    CODEX_HELP_OUTPUT="$(codex --help </dev/null 2>&1 || true)"
+    CODEX_HELP_OUTPUT="$("$KERNAUT_BINARY" --help </dev/null 2>&1 || true)"
     if grep -q -- '--disable' <<< "$CODEX_HELP_OUTPUT"; then
         _CODEX_DISABLE_HOOK_FEATURES=()
         for feature_name in hooks plugin_hooks codex_hooks; do
-            if codex --disable "$feature_name" --help </dev/null >/dev/null 2>&1; then
+            if "$KERNAUT_BINARY" --disable "$feature_name" --help </dev/null >/dev/null 2>&1; then
                 CODEX_DISABLE_HOOKS_ARGS+=("--disable" "$feature_name")
                 _CODEX_DISABLE_HOOK_FEATURES+=("$feature_name")
             fi
@@ -338,7 +337,7 @@ epoch_to_iso() {
 START_TIME=$(date +%s)
 
 CODEX_EXIT_CODE=0
-printf '%s' "$QUESTION" | run_with_timeout "$CODEX_TIMEOUT" codex "${CODEX_EXEC_ARGS[@]}" - \
+printf '%s' "$QUESTION" | run_with_timeout "$CODEX_TIMEOUT" "$KERNAUT_BINARY" "${CODEX_EXEC_ARGS[@]}" - \
     > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
 
 END_TIME=$(date +%s)

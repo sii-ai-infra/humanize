@@ -15,8 +15,8 @@
 #   --target MODE           kimi|codex|both (default: kimi)
 #   --skills-dir PATH       Legacy alias for target skills dir (kept for compatibility)
 #   --kimi-skills-dir PATH  Kimi skills dir (default: ~/.config/agents/skills)
-#   --codex-skills-dir PATH Codex skills dir (default: ${CODEX_HOME:-~/.codex}/skills)
-#   --codex-config-dir PATH Codex config dir for hooks/config.toml (default: ${CODEX_HOME:-~/.codex})
+#   --codex-skills-dir PATH Codex skills dir (default: ${KERNELCLI_HOME:-~/.kernaut}/skills)
+#   --codex-config-dir PATH Codex config dir for hooks/config.toml (default: ${KERNELCLI_HOME:-~/.kernaut})
 #   --dry-run               Print actions without writing
 #   -h, --help              Show help
 #
@@ -29,8 +29,8 @@ SKILLS_SOURCE_ROOT=""
 RUNTIME_SOURCE_ROOT=""
 TARGET="kimi"
 KIMI_SKILLS_DIR="${HOME}/.config/agents/skills"
-CODEX_SKILLS_DIR="${CODEX_HOME:-${HOME}/.codex}/skills"
-CODEX_CONFIG_DIR="${CODEX_HOME:-${HOME}/.codex}"
+CODEX_SKILLS_DIR="${KERNELCLI_HOME:-${HOME}/.kernaut}/skills"
+CODEX_CONFIG_DIR="${KERNELCLI_HOME:-${HOME}/.kernaut}"
 HUMANIZE_USER_CONFIG_DIR="${XDG_CONFIG_HOME:-${HOME}/.config}/humanize"
 COMMAND_BIN_DIR="${HUMANIZE_COMMAND_BIN_DIR:-${HOME}/.local/bin}"
 LEGACY_SKILLS_DIR=""
@@ -55,8 +55,8 @@ Options:
   --repo-root PATH        Humanize repo root (default: auto-detect)
   --skills-dir PATH       Legacy alias for target skills dir (compat)
   --kimi-skills-dir PATH  Kimi skills dir (default: ~/.config/agents/skills)
-  --codex-skills-dir PATH Codex skills dir (default: ${CODEX_HOME:-~/.codex}/skills)
-  --codex-config-dir PATH Codex config dir for hooks/config.toml (default: ${CODEX_HOME:-~/.codex})
+  --codex-skills-dir PATH Codex skills dir (default: ${KERNELCLI_HOME:-~/.kernaut}/skills)
+  --codex-config-dir PATH Codex config dir for hooks/config.toml (default: ${KERNELCLI_HOME:-~/.kernaut})
   --command-bin-dir PATH  Install helper command shims here (default: ~/.local/bin)
   --dry-run               Print actions without writing
   -h, --help              Show help

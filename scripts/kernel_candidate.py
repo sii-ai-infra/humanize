@@ -16,6 +16,8 @@ import sys
 import tempfile
 import uuid
 
+import kernel_external_candidate as external
+
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
@@ -152,6 +154,13 @@ def state_update(root, key, value):
 
 
 def score(report):
+    """Dispatch report policy; profiling is never eligible for best selection."""
+    if report.get("measurement_kind") == "profile":
+        return None
+    return external.score(report) if external.handles(report) else builtin_score(report)
+
+
+def builtin_score(report):
     """Use evaluator-produced full-case correctness/static/device evidence."""
     validation = report.get("validation", {})
     source = report.get("candidate_identity", {})
@@ -208,6 +217,8 @@ def load_candidate(root, ref):
     if hashlib.sha256(path.read_bytes()).hexdigest() != ref["report_sha256"]:
         raise ValueError("Best report changed")
     report = read_json(path)
+    if external.handles(report):
+        external.validate_evidence(root, report)
     value = score(report)
     if value is None or value != ref["score"] or report["candidate_identity"] != ref["identity"]:
         raise ValueError("Best reference does not match full evidence")
@@ -219,6 +230,8 @@ def load_candidate(root, ref):
 
 def save_report(root, before, report):
     after = identity(root)
+    if os.environ.get("KOP_MEASUREMENT_KIND") == "profile":
+        report["measurement_kind"] = "profile"
     report.update(candidate_identity=before, source_stable=equivalent(before, after))
     path = root / ".humanize/bench" / (uuid.uuid4().hex + ".json")
     report["report_path"] = path.relative_to(root).as_posix()
@@ -235,8 +248,14 @@ def save_report(root, before, report):
                 # Honor noise only if the evaluator provided it; invent no threshold.
                 noise = max(float(report.get("measurement_noise_relative", 0)),
                             float(old_report.get("measurement_noise_relative", 0)))
-                use_new = (old.get("protocol_sha256") == digest(report.get("settings", {}))
-                           and value["geomean"] > old["score"]["geomean"] * (1 + noise))
+                if external.handles(report) != external.handles(old_report):
+                    use_new = False
+                elif external.handles(report):
+                    use_new = (old.get("protocol_sha256") == digest(report.get("settings", {}))
+                               and external.improves(value, old["score"], noise))
+                else:
+                    use_new = (old.get("protocol_sha256") == digest(report.get("settings", {}))
+                               and value["geomean"] > old["score"]["geomean"] * (1 + noise))
             except (OSError, ValueError, KeyError, subprocess.CalledProcessError):
                 use_new = True
         if use_new:

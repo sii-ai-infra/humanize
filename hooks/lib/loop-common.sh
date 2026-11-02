@@ -215,7 +215,7 @@ if [[ -n "$_cfg_codex_model" && ! "$_cfg_codex_model" =~ ^[a-zA-Z0-9._/-]+$ ]]; 
     echo "  Ignoring configured codex_model; using caller preset or fallback" >&2
     _cfg_codex_model=""
 fi
-DEFAULT_CODEX_MODEL="${DEFAULT_CODEX_MODEL:-${_cfg_codex_model:-gpt-5.5}}"
+DEFAULT_CODEX_MODEL="${KOP_MODEL:-${DEFAULT_CODEX_MODEL:-${_cfg_codex_model:-kernaut-default}}}"
 _cfg_codex_profile="$(get_config_value "$_LOOP_COMMON_CONFIG" "codex_profile" 2>/dev/null || true)"
 if [[ -n "$_cfg_codex_profile" && ! "$_cfg_codex_profile" =~ ^[a-zA-Z0-9._/-]+$ ]]; then
     echo "Warning: Invalid codex_profile in merged config: $_cfg_codex_profile" >&2
@@ -230,7 +230,7 @@ if [[ -n "$_cfg_codex_effort" && ! "$_cfg_codex_effort" =~ ^(xhigh|high|medium|l
     echo "  Ignoring configured codex_effort; using caller preset or fallback" >&2
     _cfg_codex_effort=""
 fi
-DEFAULT_CODEX_EFFORT="${DEFAULT_CODEX_EFFORT:-${_cfg_codex_effort:-high}}"
+DEFAULT_CODEX_EFFORT="${KOP_REASONING_EFFORT:-${DEFAULT_CODEX_EFFORT:-${_cfg_codex_effort:-high}}}"
 
 # Load agent_teams from merged config (controls whether RLCR uses agent teams by default)
 # Precedence: pre-set by caller (e.g. --agent-teams flag) > config value > hardcoded fallback (false)
