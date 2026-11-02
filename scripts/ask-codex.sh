@@ -195,6 +195,18 @@ if [[ ! "$CODEX_EFFORT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     exit 1
 fi
 
+case "$CODEX_MODEL" in
+    kernaut-default|kernaut-pro|kernaut-flash)
+        case "$CODEX_EFFORT" in
+            low|medium|high) ;;
+            *)
+                echo "Error: $CODEX_MODEL supports user reasoning effort low, medium or high; got $CODEX_EFFORT" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+esac
+
 # ========================================
 # Detect Project Root
 # ========================================
