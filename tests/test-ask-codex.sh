@@ -700,17 +700,29 @@ fi
 reset_mock
 export MOCK_CODEX_ARGS_FILE="$TEST_DIR/runtime-model.args"
 export MOCK_CODEX_STDOUT="runtime inheritance fixture response"
-KOP_MODEL=default-pro KOP_REASONING_EFFORT=medium run_ask_codex "runtime inheritance fixture" > /dev/null 2>&1
-if grep -qx 'default-pro' "$MOCK_CODEX_ARGS_FILE" && grep -qx 'model_reasoning_effort=medium' "$MOCK_CODEX_ARGS_FILE"; then
+KOP_MODEL=kernaut-pro KOP_REASONING_EFFORT=medium run_ask_codex "runtime inheritance fixture" > /dev/null 2>&1
+if grep -qx 'kernaut-pro' "$MOCK_CODEX_ARGS_FILE" && grep -qx 'model_reasoning_effort=medium' "$MOCK_CODEX_ARGS_FILE"; then
     pass "planning inherits effective runtime model and effort"
 else
-    fail "planning inherits effective runtime model and effort" "default-pro / medium" "wrong runtime args"
+    fail "planning inherits effective runtime model and effort" "kernaut-pro / medium" "wrong runtime args"
 fi
-KOP_MODEL=default-pro run_ask_codex --codex-model default-flash:high "explicit override fixture" > /dev/null 2>&1
-if grep -qx 'default-flash' "$MOCK_CODEX_ARGS_FILE"; then
+KOP_MODEL=kernaut-pro run_ask_codex --codex-model kernaut-flash:high "explicit override fixture" > /dev/null 2>&1
+if grep -qx 'kernaut-flash' "$MOCK_CODEX_ARGS_FILE"; then
     pass "explicit planning model override wins over inherited model"
 else
-    fail "explicit planning model override wins over inherited model" "default-flash" "wrong runtime args"
+    fail "explicit planning model override wins over inherited model" "kernaut-flash" "wrong runtime args"
+fi
+
+KOP_MODEL=kernaut-flash KOP_REASONING_EFFORT=medium run_ask_codex "flash user-level effort fixture" > /dev/null 2>&1
+if grep -qx 'model_reasoning_effort=medium' "$MOCK_CODEX_ARGS_FILE"; then
+    pass "planning preserves flash user-level effort for the API boundary"
+else
+    fail "planning preserves flash user-level effort for the API boundary" "medium" "pre-mapped or missing effort"
+fi
+if KOP_MODEL=kernaut-flash KOP_REASONING_EFFORT=xhigh run_ask_codex "unsupported effort fixture" > /dev/null 2>&1; then
+    fail "planning rejects unsupported product effort" "nonzero exit" "accepted xhigh"
+else
+    pass "planning rejects unsupported product effort"
 fi
 
 print_test_summary "Ask Codex Test Summary"
