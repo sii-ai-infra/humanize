@@ -43,16 +43,46 @@ HOOK_INPUT=$(cat)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/lib/loop-common.sh"
 
-PROJECT_ROOT="$(resolve_project_root)" || exit 0
-LOOP_BASE_DIR="$PROJECT_ROOT/.humanize/rlcr"
+if [[ "${HUMANIZE_MANAGED_PIPELINE+x}" == "x" ]]; then
+    managed_v2_dispatch_block() {
+        jq -n --arg reason "$1" --arg code "$2" '{decision:"block",reason:$reason,systemMessage:"Managed pipeline requires reconciliation",managed_v2_error:$code}'
+    }
+    if [[ "$HUMANIZE_MANAGED_PIPELINE" != "v2" || "${HUMANIZE_MANAGED_RELIABILITY_V1+x}" == "x" ]]; then
+        managed_v2_dispatch_block "The managed pipeline mode is invalid or conflicts with v1. Preserve the native lifecycle." "unsupported_mode"
+        exit 0
+    fi
+    if [[ ! -f "$SCRIPT_DIR/lib/managed-completion-v2.sh" || ! -x "$SCRIPT_DIR/lib/managed-completion-v2.sh" || -L "$SCRIPT_DIR/lib/managed-completion-v2.sh" || ! -f "$SCRIPT_DIR/../scripts/run-round-benchmark-v2.sh" || ! -x "$SCRIPT_DIR/../scripts/run-round-benchmark-v2.sh" || -L "$SCRIPT_DIR/../scripts/run-round-benchmark-v2.sh" || ! -f "$SCRIPT_DIR/../scripts/validate-managed-receipt-v2.py" || ! -r "$SCRIPT_DIR/../scripts/validate-managed-receipt-v2.py" || -L "$SCRIPT_DIR/../scripts/validate-managed-receipt-v2.py" ]]; then
+        managed_v2_dispatch_block "The fixed v2 runtime is unavailable. Do not fall back to legacy completion or repeat execution." "missing_v2_runtime"
+        exit 0
+    fi
+    if ! PROJECT_ROOT="$(resolve_project_root)"; then
+        managed_v2_dispatch_block "The managed project root is unavailable. No native transition is permitted." "project_unavailable"
+        exit 0
+    fi
+    LOOP_BASE_DIR="$PROJECT_ROOT/.humanize/rlcr"
+    PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    source "$PLUGIN_ROOT/scripts/portable-timeout.sh"
+    source "$SCRIPT_DIR/lib/methodology-analysis.sh"
+    if ! source "$SCRIPT_DIR/lib/managed-completion-v2.sh"; then
+        managed_v2_dispatch_block "The fixed v2 completion library could not be initialized." "invalid_v2_runtime"
+        exit 0
+    fi
+    if ! declare -F managed_completion_validation >/dev/null || ! declare -F managed_round_status_validation_v2 >/dev/null; then
+        managed_v2_dispatch_block "The fixed v2 completion library does not implement the required callbacks." "invalid_v2_runtime"
+        exit 0
+    fi
+else
+    PROJECT_ROOT="$(resolve_project_root)" || exit 0
+    LOOP_BASE_DIR="$PROJECT_ROOT/.humanize/rlcr"
 
-# Source portable timeout wrapper for git operations
-PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-source "$PLUGIN_ROOT/scripts/portable-timeout.sh"
+    # Source portable timeout wrapper for git operations
+    PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    source "$PLUGIN_ROOT/scripts/portable-timeout.sh"
 
-# Source methodology analysis library
-source "$SCRIPT_DIR/lib/methodology-analysis.sh"
-source "$SCRIPT_DIR/lib/managed-completion.sh"
+    # Source methodology analysis library
+    source "$SCRIPT_DIR/lib/methodology-analysis.sh"
+    source "$SCRIPT_DIR/lib/managed-completion.sh"
+fi
 
 # Default timeout for git operations (30 seconds)
 GIT_TIMEOUT=30
@@ -1051,17 +1081,31 @@ if [[ "$IS_FINALIZE_PHASE" != "true" ]]; then
         exit 0
     fi
 
-    bash "$PLUGIN_ROOT/scripts/run-round-benchmark.sh" \
-        --project-root "$PROJECT_ROOT" \
-        --loop-dir "$LOOP_DIR" \
-        --round "$CURRENT_ROUND" \
-        --command-file "$BENCHMARK_COMMAND_FILE" \
-        --timeout "$BENCHMARK_TIMEOUT"
+    if [[ "${HUMANIZE_MANAGED_PIPELINE:-}" == "v2" ]]; then
+        if ! bash "$PLUGIN_ROOT/scripts/run-round-benchmark-v2.sh" \
+            --project-root "$PROJECT_ROOT" \
+            --loop-dir "$LOOP_DIR" \
+            --round "$CURRENT_ROUND" \
+            --command-file "$BENCHMARK_COMMAND_FILE" \
+            --timeout "$BENCHMARK_TIMEOUT"; then
+            managed_v2_dispatch_block "The original v2 benchmark operation is unresolved. Preserve all records; do not repeat it." "benchmark_unresolved"
+            exit 0
+        fi
+    else
+        bash "$PLUGIN_ROOT/scripts/run-round-benchmark.sh" \
+            --project-root "$PROJECT_ROOT" \
+            --loop-dir "$LOOP_DIR" \
+            --round "$CURRENT_ROUND" \
+            --command-file "$BENCHMARK_COMMAND_FILE" \
+            --timeout "$BENCHMARK_TIMEOUT"
+    fi
 
     # Platform failure belongs to the fixed runtime broker, not to candidate
     # quality. Keep this native round and its budget; never infer classification
     # by parsing stderr or by asking the user to waive a hardware check.
-    if [[ "${HUMANIZE_MANAGED_RELIABILITY_V1:-}" == "1" ]]; then
+    if [[ "${HUMANIZE_MANAGED_PIPELINE:-}" == "v2" ]]; then
+        managed_round_status_validation_v2 || exit 0
+    elif [[ "${HUMANIZE_MANAGED_RELIABILITY_V1:-}" == "1" ]]; then
         if [[ -z "${HUMANIZE_ROUND_STATUS:-}" ]] || ! _managed_round=$("$HUMANIZE_ROUND_STATUS") || ! jq -e '(.decision=="continue" or .decision=="platform_blocked" or .decision=="reference_blocked") and (.reason|type=="string")' <<<"$_managed_round" >/dev/null; then
             jq -n '{decision:"block",reason:"The original round execution status is unknown. Preserve all records for platform diagnosis; do not repeat the benchmark.",systemMessage:"Round status requires platform recovery",platform_blocked:true}'
             exit 0
