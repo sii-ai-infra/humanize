@@ -150,14 +150,9 @@ class DispatchTests(unittest.TestCase):
         with tarfile.open(fileobj=io.BytesIO(data)) as archive:
             archive.extractall(self.plugin, filter="data")
         if revision == "HEAD":
-            # The actual v2 runner is not implemented yet. The legacy branch
-            # must ignore even a deliberately failing executable resource.
-            runner = self.plugin / "scripts/run-round-benchmark-v2.sh"
-            if not runner.exists():
-                runner.write_text("#!/bin/sh\necho 'Legacy reached v2 runner' >&2\nexit 98\n")
-                runner.chmod(0o755)
             for name in ["hooks/lib/managed-completion-v2.sh", "scripts/validate-managed-receipt-v2.py",
-                         "scripts/prepare-managed-repair-v2.sh", "scripts/apply-managed-repair-v2.py", "scripts/run-round-benchmark-v2.sh"]:
+                         "scripts/prepare-managed-repair-v2.sh", "scripts/apply-managed-repair-v2.py",
+                         "scripts/run-round-benchmark-v2.sh", "scripts/run-round-benchmark-v2.py"]:
                 self.assertTrue((self.plugin / name).is_file(), name)
 
     def test_legacy_full_hook_benchmark_finalize_methodology_and_maxiter_match(self):
@@ -206,7 +201,8 @@ else:
         added = subprocess.check_output(["git", "diff", "--name-only", "--diff-filter=A", BASE, self.head,
                                          "--", "hooks", "scripts", "assets", "templates"], cwd=ROOT, text=True).splitlines()
         self.assertEqual(set(added), {"hooks/lib/managed-completion-v2.sh", "scripts/apply-managed-repair-v2.py",
-                                     "scripts/prepare-managed-repair-v2.sh"})
+                                     "scripts/prepare-managed-repair-v2.sh", "scripts/run-round-benchmark-v2.sh",
+                                     "scripts/run-round-benchmark-v2.py"})
         print("HOOK_COMPAT_BYTES", hashlib.sha256(self.new).hexdigest(),
               "BASE", BASE, "HEAD", self.head)
         cases = [("benchmark", True), ("finalize", True), ("finalize", False),
