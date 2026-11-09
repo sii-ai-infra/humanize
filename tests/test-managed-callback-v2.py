@@ -3,6 +3,7 @@
 No Node authorization, native budget helper, model or hardware acceptance claim.
 """
 import json
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -20,19 +21,36 @@ def receipt(phase="completion",outcome="passed",decision="pass",code="passed"):
 class CallbackTests(unittest.TestCase):
     def run_case(self,value,phase="completion",environment=None,callback_exit=0):
         temp=tempfile.TemporaryDirectory(prefix="native-v2-callback-");self.addCleanup(temp.cleanup)
-        root=Path(temp.name);loop=root/"loop";loop.mkdir()
+        root=Path(temp.name).resolve();project=root/"project";loop=project/"loop";loop.mkdir(parents=True)
         (loop/"state.md").write_text("---\ncurrent_round: 2\nmax_iterations: 5\n---\n")
         (loop/"round-2-prompt.md").write_text("Original prompt\n")
         before={p.name:p.read_bytes() for p in loop.iterdir()}
         encoded=json.dumps(value,ensure_ascii=False)
-        callback=root/"fixed-callback";callback.write_text("#!/bin/sh\ncat <<'RECEIPT'\n"+encoded+"\nRECEIPT\nexit "+str(callback_exit)+"\n");callback.chmod(0o700)
-        staged=root/"round-receipt.json";staged.write_text(encoded)
+        brokers=root/"brokers";brokers.mkdir()
+        callback=brokers/"completion";callback.write_text("#!/bin/sh\ncat <<'RECEIPT'\n"+encoded+"\nRECEIPT\nexit "+str(callback_exit)+"\n");callback.chmod(0o700)
+        for name in ["benchmark","round-status"]:
+            path=brokers/name;path.write_text("#!/bin/sh\nexit 0\n");path.chmod(0o700)
+        command=loop/"benchmark-command.sh";command.write_text("original fixed benchmark command\n")
+        stage=root/"01ARZ3NDEKTSV4RRFFQ69G5FAV";stage.mkdir(mode=0o700)
+        staged=stage/"round-status.json"
+        if phase=="round":staged.write_text(encoded)
+        info=loop.stat();command_hash=hashlib.sha256(command.read_bytes()).hexdigest()
+        (stage/"operation.json").write_text(json.dumps({
+            "schema":"managed-round-operation-v2","job_id":"callback-fixture","operation_id":stage.name,
+            "round":2,"project_root":str(project),"loop_dir":str(loop),"loop_dev":info.st_dev,"loop_ino":info.st_ino,
+            "benchmark_program":str(brokers/"benchmark"),"status_program":str(brokers/"round-status"),
+            "command_sha256":command_hash}))
         (root/"json.py").write_text("raise RuntimeError('task poison imported')\n")
         env=dict(os.environ,PYTHONPATH=str(root));env.pop("HUMANIZE_MANAGED_RELIABILITY_V1",None)
+        env.update(KERNAUT_WORKFLOW_JOB_ID="callback-fixture",HUMANIZE_COMPLETION_VALIDATOR=str(callback),
+                   HUMANIZE_MANAGED_ROUND_RECEIPT_V2=str(staged),HUMANIZE_BENCHMARK_PROGRAM_V2=str(brokers/"benchmark"),
+                   HUMANIZE_ROUND_STATUS=str(brokers/"round-status"),HUMANIZE_BENCHMARK_COMMAND_SHA256_V2=command_hash)
         env.update(environment or {})
+        for path in root.rglob("*"):path.chmod(path.stat().st_mode & 0o777 & ~0o022)
+        before={p.name:p.read_bytes() for p in loop.iterdir()}
         script='''set -euo pipefail
-PLUGIN_ROOT="$1"; LOOP_DIR="$2/loop"; CURRENT_ROUND=2
-export HUMANIZE_MANAGED_PIPELINE=v2 HUMANIZE_COMPLETION_VALIDATOR="$2/fixed-callback" HUMANIZE_MANAGED_ROUND_RECEIPT_V2="$2/round-receipt.json"
+PLUGIN_ROOT="$1"; PROJECT_ROOT="$2/project"; LOOP_DIR="$PROJECT_ROOT/loop"; CURRENT_ROUND=2
+export HUMANIZE_MANAGED_PIPELINE=v2
 source "$1/hooks/lib/managed-completion-v2.sh"
 if [[ "$3" == completion ]]; then
  if managed_completion_validation; then echo accepted >&2; else echo blocked >&2; fi

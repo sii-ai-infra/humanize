@@ -110,7 +110,8 @@ def execute(args):
         raise ValueError("unambiguous protected v2 mode required")
     fs = load("fixed_native_files_v2", "scripts/apply-managed-repair-v2.py")
     decoder = load("fixed_round_decoder_v2", "scripts/validate-managed-receipt-v2.py")
-    if not fs.DECIMAL.fullmatch(args.round) or not fs.DECIMAL.fullmatch(args.timeout) or int(args.timeout) < 1:
+    if (not fs.DECIMAL.fullmatch(args.round) or
+            not args.completion and (not fs.DECIMAL.fullmatch(args.timeout) or int(args.timeout) < 1)):
         raise ValueError("invalid original round/timeout")
     project = Path(args.project_root)
     loop = Path(args.loop_dir)
@@ -148,6 +149,30 @@ def execute(args):
         command = fs.read(loop_fd, "benchmark-command.sh", 64 * 1024)
         if command is None or fs.digest(command[0])["sha256"] != operation["command_sha256"]:
             raise ValueError("original benchmark command changed")
+        if args.completion:
+            completion = program(fs, "HUMANIZE_COMPLETION_VALIDATOR")
+            if status.name != "round-status" or completion != status.with_name("completion"):
+                raise ValueError("completion callback differs from the original fixed broker directory")
+            name = "completion-status.json"
+            stored = fs.read(stage_fd, name, RECEIPT_LIMIT)
+            if stored is not None and stored[1] != 0o600:
+                raise ValueError("original completion staging mode changed")
+            if stored is None:
+                stdout, _ = run_fixed(completion, RECEIPT_LIMIT)
+                decoder.decode(stdout, "completion")
+                fs.verify_loop_inode(stage_fd, receipt_path.parent)
+                fs.verify_loop_inode(loop_fd, loop)
+                publish(fs, stage_fd, name, stdout)
+                stored = fs.read(stage_fd, name, RECEIPT_LIMIT)
+            if stored is None:
+                raise ValueError("original completion staging is unavailable")
+            decoder.decode(stored[0], "completion")
+            fs.verify_loop_inode(stage_fd, receipt_path.parent)
+            fs.verify_loop_inode(loop_fd, loop)
+            # The hook sees exactly the bytes already committed by this
+            # original operation. Retrying does not invoke the broker again.
+            sys.stdout.buffer.write(stored[0])
+            return
         receipt = fs.read(stage_fd, receipt_path.name, RECEIPT_LIMIT)
         summary = fs.read(stage_fd, "benchmark-summary.txt", SUMMARY_LIMIT + 1024)
         if any(value is not None and value[1] != 0o600 for value in [receipt, summary]):
@@ -192,12 +217,18 @@ def execute(args):
 
 def main():
     parser = argparse.ArgumentParser(allow_abbrev=False)
-    names = ["project-root", "loop-dir", "round", "command-file", "timeout"]
+    completion = sys.argv[1:2] == ["--completion"]
+    parser.add_argument("--completion", action="store_true")
+    names = (["project-root", "loop-dir", "round"] if completion else
+             ["project-root", "loop-dir", "round", "command-file", "timeout"])
     for name in names:
         parser.add_argument("--" + name, required=True)
-    if len(sys.argv) != 11 or sys.argv[1::2] != ["--" + name for name in names]:
-        parser.error("exactly the original five unique arguments are required")
+    arguments = sys.argv[2:] if completion else sys.argv[1:]
+    if len(arguments) != len(names) * 2 or arguments[::2] != ["--" + name for name in names]:
+        parser.error("exactly the original unique arguments are required")
     args = parser.parse_args()
+    if completion:
+        args.command_file = str(Path(args.loop_dir) / "benchmark-command.sh")
     try:
         execute(args)
     except (ValueError, OSError, RuntimeError, KeyError, TypeError, AttributeError) as error:

@@ -59,7 +59,7 @@ if name == "benchmark":
 else:
     sys.stdout.buffer.write(pathlib.Path(os.environ["BENCHMARK_FIXTURE_STATUS"]).read_bytes())
 '''
-        for name in ["benchmark", "round-status"]:
+        for name in ["benchmark", "round-status", "completion"]:
             path = self.fixture_bin / name
             path.write_text(code)
             path.chmod(0o700)
@@ -68,6 +68,7 @@ else:
             HUMANIZE_MANAGED_PIPELINE="v2", KERNAUT_WORKFLOW_JOB_ID="original-job",
             HUMANIZE_BENCHMARK_PROGRAM_V2=str(self.fixture_bin / "benchmark"),
             HUMANIZE_ROUND_STATUS=str(self.fixture_bin / "round-status"),
+            HUMANIZE_COMPLETION_VALIDATOR=str(self.fixture_bin / "completion"),
             HUMANIZE_MANAGED_ROUND_RECEIPT_V2=str(self.stage / "round-status.json"),
             HUMANIZE_BENCHMARK_COMMAND_SHA256_V2=hashlib.sha256(self.command.read_bytes()).hexdigest(),
             BENCHMARK_FIXTURE_TRACE=str(self.trace), BENCHMARK_FIXTURE_STATUS=str(self.answer))
@@ -92,6 +93,95 @@ else:
         return [str(self.plugin / "scripts/run-round-benchmark-v2.sh"),
                 "--project-root", str(self.project), "--loop-dir", str(self.loop),
                 "--round", "2", "--command-file", str(self.command), "--timeout", "5"]
+
+    def completion_command_line(self):
+        return ["/usr/bin/python3.12", "-I", "-S", "-B",
+                str(self.plugin / "scripts/run-round-benchmark-v2.py"), "--completion",
+                "--project-root", str(self.project), "--loop-dir", str(self.loop), "--round", "2"]
+
+    def prepare_completion(self):
+        value = dict(self.receipt, schema="managed-completion-v2", decision="pass")
+        self.answer.write_text(json.dumps(value) + "\n")
+        return self.answer.read_bytes()
+
+    def run_completion(self, additions=None):
+        return subprocess.run(self.completion_command_line(), env=dict(self.env, **(additions or {})),
+                              cwd=self.root, capture_output=True, timeout=10)
+
+    def test_completion_concurrent_replay_publishes_original_bytes_once_without_native_changes(self):
+        expected = self.prepare_completion()
+        before = self.native_files()
+        children = [subprocess.Popen(self.completion_command_line(), env=self.env,
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=self.root) for _ in range(6)]
+        try:
+            for child in children:
+                stdout, stderr = child.communicate(timeout=15)
+                self.assertEqual(child.returncode, 0, stderr)
+                self.assertEqual(stdout, expected)
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                child.wait()
+                child.stdout.close()
+                child.stderr.close()
+        self.assertEqual(self.calls(), ["completion"])
+        self.assertEqual((self.stage / "completion-status.json").read_bytes(), expected)
+        self.assertEqual((self.stage / "completion-status.json").stat().st_mode & 0o777, 0o600)
+        self.assertEqual(self.native_files(), before)
+        self.assertFalse((self.stage / "round-status.json").exists())
+
+    def test_completion_failure_and_invalid_tuple_never_publish_or_authorize(self):
+        self.prepare_completion()
+        before = self.native_files()
+        failed = self.run_completion({"BENCHMARK_FIXTURE_FAIL": "completion"})
+        self.assertNotEqual(failed.returncode, 0)
+        self.assertEqual(failed.stdout, b"")
+        self.assertFalse((self.stage / "completion-status.json").exists())
+        self.answer.write_text(json.dumps(self.receipt))  # round receipt cannot complete
+        invalid = self.run_completion()
+        self.assertNotEqual(invalid.returncode, 0)
+        self.assertEqual(invalid.stdout, b"")
+        self.assertFalse((self.stage / "completion-status.json").exists())
+        self.assertEqual(self.native_files(), before)
+
+    def test_completion_rejects_changed_binding_and_cached_mode_before_callback(self):
+        expected = self.prepare_completion()
+        alternate = self.root / "completion"
+        shutil.copyfile(self.fixture_bin / "completion", alternate)
+        alternate.chmod(0o700)
+        self.assertNotEqual(self.run_completion({"HUMANIZE_COMPLETION_VALIDATOR": str(alternate)}).returncode, 0)
+        self.assertEqual(self.calls(), [])
+        self.operation["round"] = 3
+        (self.stage / "operation.json").write_text(json.dumps(self.operation))
+        self.assertNotEqual(self.run_completion().returncode, 0)
+        self.assertEqual(self.calls(), [])
+        self.operation["round"] = 2
+        (self.stage / "operation.json").write_text(json.dumps(self.operation))
+        result = self.run_completion()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, expected)
+        cached = self.stage / "completion-status.json"
+        cached.chmod(0o644)
+        self.assertNotEqual(self.run_completion().returncode, 0)
+        cached.chmod(0o600)
+        cached.write_text('{"schema":"managed-completion-v2","decision":"pass"}')
+        self.assertNotEqual(self.run_completion().returncode, 0)
+        self.assertEqual(self.calls(), ["completion"])
+
+    def test_completion_operation_ids_have_separate_staging(self):
+        expected = self.prepare_completion()
+        self.assertEqual(self.run_completion().returncode, 0)
+        second = self.stage.parent / "01ARZ3NDEKTSV4RRFFQ69G5FAW"
+        second.mkdir(mode=0o700)
+        operation = dict(self.operation, operation_id=second.name)
+        (second / "operation.json").write_text(json.dumps(operation))
+        result = self.run_completion({"HUMANIZE_MANAGED_ROUND_RECEIPT_V2": str(second / "round-status.json")})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, expected)
+        self.assertEqual((self.stage / "completion-status.json").read_bytes(), expected)
+        self.assertEqual((second / "completion-status.json").read_bytes(), expected)
+        self.assertEqual(self.calls(), ["completion", "completion"])
 
     def tearDown(self):
         self.assertEqual(list(self.loop.glob(".managed-benchmark-v2-*")), [])

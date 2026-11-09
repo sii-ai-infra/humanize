@@ -83,12 +83,20 @@ managed_v2_disposition() {
 
 managed_completion_validation() {
     managed_v2_mode || return 1
-    local result
+    local result helper="$PLUGIN_ROOT/scripts/run-round-benchmark-v2.py"
     if [[ "${HUMANIZE_COMPLETION_VALIDATOR:-}" != /* || ! -f "$HUMANIZE_COMPLETION_VALIDATOR" || ! -x "$HUMANIZE_COMPLETION_VALIDATOR" || -L "$HUMANIZE_COMPLETION_VALIDATOR" ]]; then
         managed_v2_block "The fixed v2 completion callback is unavailable. No completion is authorized." "missing_callback"
         return 1
     fi
-    if ! result=$(set -o pipefail; "$HUMANIZE_COMPLETION_VALIDATOR" | managed_v2_decode completion); then
+    if [[ ! -f "$helper" || ! -r "$helper" || -L "$helper" || "${PROJECT_ROOT:-}" != /* || "${LOOP_DIR:-}" != /* || -z "${CURRENT_ROUND:-}" ]]; then
+        managed_v2_block "The original completion operation has no fixed staging helper or native context." "missing_completion_operation"
+        return 1
+    fi
+    # Reuse the round adapter's original descriptor, lock and atomic publisher.
+    # Native disposition only sees the exact receipt committed for this gate.
+    if ! result=$(set -o pipefail; /usr/bin/python3.12 -I -S -B "$helper" --completion \
+        --project-root "$PROJECT_ROOT" --loop-dir "$LOOP_DIR" --round "$CURRENT_ROUND" \
+        | managed_v2_decode completion); then
         managed_v2_block "The completion callback did not return an exact v2 receipt. Reconcile its original operation." "invalid_receipt"
         return 1
     fi
