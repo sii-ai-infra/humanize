@@ -19,7 +19,7 @@ def receipt(phase="completion",outcome="passed",decision="pass",code="passed"):
 
 
 class CallbackTests(unittest.TestCase):
-    def run_case(self,value,phase="completion",environment=None,callback_exit=0):
+    def run_case(self,value,phase="completion",environment=None,callback_exit=0,missing_project=False):
         temp=tempfile.TemporaryDirectory(prefix="native-v2-callback-");self.addCleanup(temp.cleanup)
         root=Path(temp.name).resolve();project=root/"project";loop=project/"loop";loop.mkdir(parents=True)
         (loop/"state.md").write_text("---\ncurrent_round: 2\nmax_iterations: 5\n---\n")
@@ -52,19 +52,27 @@ class CallbackTests(unittest.TestCase):
 PLUGIN_ROOT="$1"; PROJECT_ROOT="$2/project"; LOOP_DIR="$PROJECT_ROOT/loop"; CURRENT_ROUND=2
 export HUMANIZE_MANAGED_PIPELINE=v2
 source "$1/hooks/lib/managed-completion-v2.sh"
+if [[ "$4" == missing-project ]]; then unset PROJECT_ROOT; fi
 if [[ "$3" == completion ]]; then
  if managed_completion_validation; then echo accepted >&2; else echo blocked >&2; fi
 else
  if managed_round_status_validation_v2; then echo accepted >&2; else echo blocked >&2; fi
 fi
 '''
-        result=subprocess.run(["bash","-c",script,"test",str(ROOT),str(root),phase],cwd=root,env=env,capture_output=True,text=True,timeout=10)
+        result=subprocess.run(["bash","-c",script,"test",str(ROOT),str(root),phase,
+                               "missing-project" if missing_project else "current-project"],
+                              cwd=root,env=env,capture_output=True,text=True,timeout=10)
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertEqual(before,{p.name:p.read_bytes() for p in loop.iterdir()})
         return result
 
     def test_machine_pass_only_authorizes_original_completion_caller(self):
         result=self.run_case(receipt());self.assertIn("accepted",result.stderr);self.assertEqual(result.stdout,"")
+
+    def test_missing_completion_context_reuses_closed_invalid_receipt_error(self):
+        result=self.run_case(receipt(),missing_project=True)
+        self.assertIn("blocked",result.stderr)
+        self.assertEqual(json.loads(result.stdout)["managed_v2_error"],"invalid_receipt")
 
     def test_round_continue_is_not_terminal_completion(self):
         result=self.run_case(receipt("round","passed","continue","passed"),"round")

@@ -162,6 +162,8 @@ def execute(args):
                 decoder.decode(stdout, "completion")
                 fs.verify_loop_inode(stage_fd, receipt_path.parent)
                 fs.verify_loop_inode(loop_fd, loop)
+                # A failure before publication can invoke this same callback
+                # again. Its original Node operation owns idempotent replay.
                 publish(fs, stage_fd, name, stdout)
                 stored = fs.read(stage_fd, name, RECEIPT_LIMIT)
             if stored is None:

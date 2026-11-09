@@ -155,6 +155,126 @@ class DispatchTests(unittest.TestCase):
                          "scripts/run-round-benchmark-v2.sh", "scripts/run-round-benchmark-v2.py"]:
                 self.assertTrue((self.plugin / name).is_file(), name)
 
+    def prepare_v2_completion(self, decision="pass"):
+        self.install_product("HEAD")
+        actual_base = subprocess.check_output(["git", "-C", str(self.task), "rev-parse", "HEAD"]).strip()
+        state = self.state.replace(b"deadbeef", actual_base).replace(
+            b"agent_teams: false\n", b"agent_teams: false\nprivacy_mode: true\n")
+        (self.loop / "state.md").unlink()
+        (self.loop / "finalize-state.md").write_bytes(state)
+        (self.loop / "finalize-summary.md").write_text("# Original final summary\n")
+        command = self.loop / "benchmark-command.sh"
+        command.write_text("original protected benchmark command\n")
+        temporary = tempfile.TemporaryDirectory(prefix="dispatch-completion-operation-")
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name).resolve()
+        brokers = root / "brokers"
+        brokers.mkdir()
+        trace = root / "trace"
+        answer = root / "answer.json"
+        fixture = '''#!/usr/bin/python3.12 -I
+import os, pathlib, sys
+name = pathlib.Path(sys.argv[0]).name
+with open(os.environ["COMPLETION_FIXTURE_TRACE"], "a") as stream:
+    stream.write(name + "\\n")
+if name != "completion" or sys.stdin.buffer.read():
+    raise SystemExit(97)
+sys.stdout.buffer.write(pathlib.Path(os.environ["COMPLETION_FIXTURE_ANSWER"]).read_bytes())
+'''
+        for name in ["completion", "benchmark", "round-status"]:
+            path = brokers / name
+            path.write_text(fixture)
+            path.chmod(0o700)
+        value = {"schema":"managed-completion-v2", "decision":decision,
+                 "outcome":"passed" if decision == "pass" else "unmeasurable",
+                 "reason_code":"passed" if decision == "pass" else "measurement_missing",
+                 "reason":"Original source-bound completion result", "evidence_sha256":"a"*64}
+        expected = (" \n" + json.dumps(value, indent=2) + "\n\n").encode()
+        answer.write_bytes(expected)
+        stage = root / "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        stage.mkdir(mode=0o700)
+        info = self.loop.stat()
+        command_hash = hashlib.sha256(command.read_bytes()).hexdigest()
+        descriptor = {"schema":"managed-round-operation-v2", "job_id":"main-hook-completion",
+                      "operation_id":stage.name, "round":0, "project_root":str(self.task),
+                      "loop_dir":str(self.loop), "loop_dev":info.st_dev, "loop_ino":info.st_ino,
+                      "benchmark_program":str(brokers / "benchmark"),
+                      "status_program":str(brokers / "round-status"), "command_sha256":command_hash}
+        (stage / "operation.json").write_text(json.dumps(descriptor))
+        (stage / "operation.json").chmod(0o600)
+        # Same real strict metadata checks as the protected adapter, even when
+        # the peer's default umask would make fixture directories writable.
+        for parent in [self.task, root]:
+            for path in parent.rglob("*"):
+                if not path.is_symlink():
+                    path.chmod(path.stat().st_mode & 0o777 & ~0o022)
+        additions = {
+            "HUMANIZE_MANAGED_PIPELINE":"v2", "KERNAUT_WORKFLOW_JOB_ID":"main-hook-completion",
+            "HUMANIZE_COMPLETION_VALIDATOR":str(brokers / "completion"),
+            "HUMANIZE_BENCHMARK_PROGRAM_V2":str(brokers / "benchmark"),
+            "HUMANIZE_ROUND_STATUS":str(brokers / "round-status"),
+            "HUMANIZE_MANAGED_ROUND_RECEIPT_V2":str(stage / "round-status.json"),
+            "HUMANIZE_BENCHMARK_COMMAND_SHA256_V2":command_hash,
+            "COMPLETION_FIXTURE_TRACE":str(trace), "COMPLETION_FIXTURE_ANSWER":str(answer),
+        }
+        return additions, stage, trace, answer, expected
+
+    def test_v2_main_stop_completion_supplies_context_and_commits_before_terminal_rename(self):
+        additions, stage, trace, _, expected = self.prepare_v2_completion()
+        before = self.native_files()
+        result = self.run_hook(self.new, additions)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"Finalize Phase complete", result.stderr)
+        self.assertEqual(trace.read_text().splitlines(), ["completion"])
+        self.assertEqual((stage / "completion-status.json").read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE((stage / "completion-status.json").stat().st_mode), 0o600)
+        self.assertFalse((stage / "round-status.json").exists())
+        terminal = dict(before)
+        terminal["complete-state.md"] = terminal.pop("finalize-state.md")
+        self.assertEqual(self.native_files(), terminal)
+
+    def test_v2_main_stop_replays_original_completion_bytes_and_disposition(self):
+        additions, stage, trace, answer, expected = self.prepare_v2_completion("pause")
+        before = self.native_files()
+        inodes = {p.name:p.stat().st_ino for p in self.loop.iterdir() if p.is_file()}
+        first = self.run_hook(self.new, additions)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(json.loads(first.stdout)["managed_v2_decision"], "pause")
+        changed = dict(json.loads(expected), outcome="passed", decision="pass", reason_code="passed",
+                       evidence_sha256="b"*64, reason="Must not replace the committed original")
+        answer.write_text(json.dumps(changed))
+        second = self.run_hook(self.new, additions)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(second.stdout, first.stdout)
+        self.assertEqual(trace.read_text().splitlines(), ["completion"])
+        self.assertEqual((stage / "completion-status.json").read_bytes(), expected)
+        self.assertEqual(self.native_files(), before)
+        self.assertEqual({p.name:p.stat().st_ino for p in self.loop.iterdir() if p.is_file()}, inodes)
+
+    def test_v2_main_stop_missing_completion_helper_or_operation_context_preserves_loop(self):
+        additions, stage, trace, _, _ = self.prepare_v2_completion()
+        before = self.native_files()
+        descriptor = (stage / "operation.json").read_bytes()
+        for missing in ["helper", "descriptor", "job"]:
+            with self.subTest(missing=missing):
+                self.install_product("HEAD")
+                (stage / "operation.json").write_bytes(descriptor)
+                (stage / "operation.json").chmod(0o600)
+                environment = dict(additions)
+                if missing == "helper":
+                    (self.plugin / "scripts/run-round-benchmark-v2.py").unlink()
+                elif missing == "descriptor":
+                    (stage / "operation.json").unlink()
+                else:
+                    environment["KERNAUT_WORKFLOW_JOB_ID"] = ""
+                result = self.run_hook(self.new, environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["managed_v2_error"], "invalid_receipt")
+                self.assertFalse(trace.exists())
+                self.assertFalse((stage / "completion-status.json").exists())
+                self.assertEqual(self.native_files(), before)
+
     def test_legacy_full_hook_benchmark_finalize_methodology_and_maxiter_match(self):
         bin_dir = self.task / "fixture-bin"
         bin_dir.mkdir()

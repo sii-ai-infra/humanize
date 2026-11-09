@@ -89,7 +89,7 @@ managed_completion_validation() {
         return 1
     fi
     if [[ ! -f "$helper" || ! -r "$helper" || -L "$helper" || "${PROJECT_ROOT:-}" != /* || "${LOOP_DIR:-}" != /* || -z "${CURRENT_ROUND:-}" ]]; then
-        managed_v2_block "The original completion operation has no fixed staging helper or native context." "missing_completion_operation"
+        managed_v2_block "The original completion operation has no fixed staging helper or native context." "invalid_receipt"
         return 1
     fi
     # Reuse the round adapter's original descriptor, lock and atomic publisher.
