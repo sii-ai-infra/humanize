@@ -275,6 +275,45 @@ sys.stdout.buffer.write(pathlib.Path(os.environ["COMPLETION_FIXTURE_ANSWER"]).re
                 self.assertFalse((stage / "completion-status.json").exists())
                 self.assertEqual(self.native_files(), before)
 
+    def test_v2_main_stop_predeclared_repair_paths_distinguish_unavailable_from_unresolved(self):
+        for shape in ["missing", "directory", "symlink", "missing-plan", "invalid-tuple"]:
+            with self.subTest(shape=shape):
+                additions, stage, trace, answer, _ = self.prepare_v2_completion()
+                value = dict(json.loads(answer.read_bytes()), decision="repair", outcome="target_not_met",
+                             reason_code="target_not_met")
+                answer.write_text(json.dumps(value))
+                expected = answer.read_bytes()
+                plan = stage / "repair-plan.json"
+                intent = stage / "repair-intent.json"
+                plan.write_text("{}\n")
+                plan.chmod(0o600)
+                if shape == "directory":
+                    intent.mkdir(mode=0o700)
+                elif shape == "symlink":
+                    intent.symlink_to(plan)
+                elif shape in ["missing-plan", "invalid-tuple"]:
+                    intent.write_text("{}\n")
+                    intent.chmod(0o600)
+                    if shape == "missing-plan":
+                        plan.unlink()
+                additions.update(HUMANIZE_MANAGED_REPAIR_PLAN_V2=str(plan),
+                                 HUMANIZE_MANAGED_REPAIR_INTENT_V2=str(intent),
+                                 HUMANIZE_MANAGED_REPAIR_OPERATION_V2=stage.name)
+                before = self.native_files()
+                result = self.run_hook(self.new, additions)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                unresolved = shape in ["missing-plan", "invalid-tuple"]
+                self.assertEqual(json.loads(result.stdout)["managed_v2_error"],
+                                 "repair_unresolved" if unresolved else "repair_unavailable")
+                self.assertEqual(b"Native v2 operation unresolved" in result.stderr, unresolved)
+                self.assertEqual(trace.read_text().splitlines(), ["completion"])
+                self.assertEqual((stage / "completion-status.json").read_bytes(), expected)
+                self.assertFalse((stage / "round-status.json").exists())
+                self.assertEqual(self.native_files(), before)
+                # Re-create only the fixture's initial lifecycle for the next
+                # independent gate; no accepted repair transition occurred.
+                (self.loop / "state.md").write_bytes(self.state)
+
     def test_legacy_full_hook_benchmark_finalize_methodology_and_maxiter_match(self):
         bin_dir = self.task / "fixture-bin"
         bin_dir.mkdir()

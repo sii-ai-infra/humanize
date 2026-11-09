@@ -29,6 +29,14 @@ managed_v2_apply() {
         managed_v2_block "The original repair operation has no fixed prepared native helper/plan. Reconcile it; do not repeat measurement or invent another round." "repair_unavailable"
         return 1
     fi
+    # Gate launch predeclares these paths before Node has prepared a repair.
+    # Intent is published last. Its safe file shape is only availability, never
+    # authority: the helper still verifies the full tuple and bound plan. An
+    # existing intent with a missing/damaged plan must remain unresolved.
+    if [[ ! -f "$HUMANIZE_MANAGED_REPAIR_INTENT_V2" || -L "$HUMANIZE_MANAGED_REPAIR_INTENT_V2" ]]; then
+        managed_v2_block "The original repair operation has no available protected intent. Do not repeat measurement or invent another round." "repair_unavailable"
+        return 1
+    fi
     # The fixed helper alone owns native budget/state changes. The plan is
     # supplied by the protected controller, not by candidate/task arguments.
     # A known operation preserves native stdout: repair_round block for a

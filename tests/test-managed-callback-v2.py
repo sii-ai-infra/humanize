@@ -19,7 +19,7 @@ def receipt(phase="completion",outcome="passed",decision="pass",code="passed"):
 
 
 class CallbackTests(unittest.TestCase):
-    def run_case(self,value,phase="completion",environment=None,callback_exit=0,missing_project=False):
+    def run_case(self,value,phase="completion",environment=None,callback_exit=0,missing_project=False,repair_shape=None):
         temp=tempfile.TemporaryDirectory(prefix="native-v2-callback-");self.addCleanup(temp.cleanup)
         root=Path(temp.name).resolve();project=root/"project";loop=project/"loop";loop.mkdir(parents=True)
         (loop/"state.md").write_text("---\ncurrent_round: 2\nmax_iterations: 5\n---\n")
@@ -47,6 +47,19 @@ class CallbackTests(unittest.TestCase):
                    HUMANIZE_ROUND_STATUS=str(brokers/"round-status"),HUMANIZE_BENCHMARK_COMMAND_SHA256_V2=command_hash)
         env.update(environment or {})
         for path in root.rglob("*"):path.chmod(path.stat().st_mode & 0o777 & ~0o022)
+        if repair_shape is not None:
+            plan=stage/"repair-plan.json";intent=stage/"repair-intent.json"
+            plan.write_text("{}\n");plan.chmod(0o600)
+            if repair_shape=="directory":intent.mkdir(mode=0o700)
+            elif repair_shape=="symlink":intent.symlink_to(plan)
+            elif repair_shape=="fifo":os.mkfifo(intent,0o600)
+            elif repair_shape in ["invalid-tuple","missing-plan"]:
+                intent.write_text("{}\n");intent.chmod(0o600)
+                if repair_shape=="missing-plan":plan.unlink()
+            elif repair_shape!="missing":raise ValueError("unknown repair fixture shape")
+            env.update(HUMANIZE_MANAGED_REPAIR_PLAN_V2=str(plan),
+                       HUMANIZE_MANAGED_REPAIR_INTENT_V2=str(intent),
+                       HUMANIZE_MANAGED_REPAIR_OPERATION_V2=stage.name)
         before={p.name:p.read_bytes() for p in loop.iterdir()}
         script='''set -euo pipefail
 PLUGIN_ROOT="$1"; PROJECT_ROOT="$2/project"; LOOP_DIR="$PROJECT_ROOT/loop"; CURRENT_ROUND=2
@@ -94,6 +107,26 @@ fi
             result=self.run_case(receipt(outcome=outcome,decision="repair",code=code))
             self.assertIn("blocked",result.stderr)
             self.assertEqual(json.loads(result.stdout)["managed_v2_error"],"repair_unavailable")
+
+    def test_predeclared_repair_paths_without_regular_intent_remain_unavailable(self):
+        for phase,outcome,code in [("completion","target_not_met","target_not_met"),
+                                   ("round","unmeasurable","owner_requested_repair")]:
+            for shape in ["missing","directory","symlink","fifo"]:
+                with self.subTest(phase=phase,shape=shape):
+                    result=self.run_case(receipt(phase,outcome,"repair",code),phase,repair_shape=shape)
+                    self.assertIn("blocked",result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["managed_v2_error"],"repair_unavailable")
+                    self.assertNotIn("Native v2 operation unresolved",result.stderr)
+
+    def test_regular_intent_does_not_authorize_missing_or_invalid_plan(self):
+        for phase,outcome,code in [("completion","target_not_met","target_not_met"),
+                                   ("round","unmeasurable","owner_requested_repair")]:
+            for shape in ["missing-plan","invalid-tuple"]:
+                with self.subTest(phase=phase,shape=shape):
+                    result=self.run_case(receipt(phase,outcome,"repair",code),phase,repair_shape=shape)
+                    self.assertIn("blocked",result.stderr)
+                    self.assertEqual(json.loads(result.stdout)["managed_v2_error"],"repair_unresolved")
+                    self.assertIn("Native v2 operation unresolved",result.stderr)
 
     def test_legacy_pass_and_conflicting_mode_never_authorize_v2(self):
         value=receipt();value["schema"]="managed-completion-v1"
