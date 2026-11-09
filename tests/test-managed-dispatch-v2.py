@@ -155,16 +155,21 @@ class DispatchTests(unittest.TestCase):
                          "scripts/run-round-benchmark-v2.sh", "scripts/run-round-benchmark-v2.py"]:
                 self.assertTrue((self.plugin / name).is_file(), name)
 
-    def prepare_v2_completion(self, decision="pass"):
+    def prepare_v2_completion(self, decision="pass", privacy=True):
         self.install_product("HEAD")
         actual_base = subprocess.check_output(["git", "-C", str(self.task), "rev-parse", "HEAD"]).strip()
         state = self.state.replace(b"deadbeef", actual_base).replace(
-            b"agent_teams: false\n", b"agent_teams: false\nprivacy_mode: true\n")
+            b"agent_teams: false\n", b"agent_teams: false\nprivacy_mode: " + (b"true" if privacy else b"false") + b"\n")
         (self.loop / "state.md").unlink()
         (self.loop / "finalize-state.md").write_bytes(state)
         (self.loop / "finalize-summary.md").write_text("# Original final summary\n")
+        (self.loop / "benchmark-command.sh").write_text("original protected benchmark command\n")
+        return self.stage_v2_completion(decision)
+
+    def stage_v2_completion(self, decision="pass", operation_id="01ARZ3NDEKTSV4RRFFQ69G5FAV"):
+        # Each new Stop gate needs a new operation, even when its native round
+        # is unchanged. A previous phase's staged completion is not its answer.
         command = self.loop / "benchmark-command.sh"
-        command.write_text("original protected benchmark command\n")
         temporary = tempfile.TemporaryDirectory(prefix="dispatch-completion-operation-")
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name).resolve()
@@ -191,7 +196,7 @@ sys.stdout.buffer.write(pathlib.Path(os.environ["COMPLETION_FIXTURE_ANSWER"]).re
                  "reason":"Original source-bound completion result", "evidence_sha256":"a"*64}
         expected = (" \n" + json.dumps(value, indent=2) + "\n\n").encode()
         answer.write_bytes(expected)
-        stage = root / "01ARZ3NDEKTSV4RRFFQ69G5FAV"
+        stage = root / operation_id
         stage.mkdir(mode=0o700)
         info = self.loop.stat()
         command_hash = hashlib.sha256(command.read_bytes()).hexdigest()
@@ -232,6 +237,61 @@ sys.stdout.buffer.write(pathlib.Path(os.environ["COMPLETION_FIXTURE_ANSWER"]).re
         self.assertFalse((stage / "round-status.json").exists())
         terminal = dict(before)
         terminal["complete-state.md"] = terminal.pop("finalize-state.md")
+        self.assertEqual(self.native_files(), terminal)
+
+    def test_v2_main_stop_nonprivate_finalize_pass_enters_methodology(self):
+        additions, stage, trace, _, expected = self.prepare_v2_completion(privacy=False)
+        before = self.native_files()
+        result = self.run_hook(self.new, additions)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout)["decision"], "block")
+        self.assertIn(b"Finalize Phase complete", result.stderr)
+        self.assertEqual(trace.read_text().splitlines(), ["completion"])
+        self.assertEqual((stage / "completion-status.json").read_bytes(), expected)
+        self.assertEqual(stat.S_IMODE((stage / "completion-status.json").stat().st_mode), 0o600)
+        self.assertFalse((stage / "round-status.json").exists())
+        transitioned = dict(before)
+        transitioned["methodology-analysis-state.md"] = transitioned.pop("finalize-state.md")
+        transitioned[".methodology-exit-reason"] = b"complete\n"
+        transitioned["methodology-analysis-done.md"] = b""
+        self.assertEqual(self.native_files(), transitioned)
+
+    def test_v2_main_stop_methodology_completion_uses_new_operation_then_completes(self):
+        first_env, first_stage, first_trace, _, first_bytes = self.prepare_v2_completion(privacy=False)
+        first = self.run_hook(self.new, first_env)
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(json.loads(first.stdout)["decision"], "block")
+        self.assertEqual(first_trace.read_text().splitlines(), ["completion"])
+        self.assertEqual((first_stage / "completion-status.json").read_bytes(), first_bytes)
+        self.assertTrue((self.loop / "methodology-analysis-state.md").is_file())
+        self.assertEqual((self.loop / ".methodology-exit-reason").read_bytes(), b"complete\n")
+        (self.loop / "methodology-analysis-done.md").write_text("Completed fixture analysis\n")
+        (self.loop / "methodology-analysis-report.md").write_text("# Fixture methodology report\n")
+
+        additions, stage, trace, answer, _ = self.stage_v2_completion(
+            operation_id="01ARZ3NDEKTSV4RRFFQ69G5FAW")
+        changed = dict(json.loads(answer.read_bytes()), evidence_sha256="b"*64,
+                       reason="Fresh methodology completion for the next Stop gate")
+        expected = (" \n" + json.dumps(changed, indent=2) + "\n\n").encode()
+        answer.write_bytes(expected)
+        self.assertNotEqual(stage.name, first_stage.name)
+        self.assertNotEqual(expected, first_bytes)
+        self.assertEqual(json.loads((stage / "operation.json").read_bytes())["round"], 0)
+        before = self.native_files()
+        self.assertIn(b"current_round: 0\n", before["methodology-analysis-state.md"])
+        result = self.run_hook(self.new, additions)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, b"")
+        self.assertIn(b"Methodology analysis complete", result.stderr)
+        self.assertEqual(trace.read_text().splitlines(), ["completion"])
+        self.assertEqual(first_trace.read_text().splitlines(), ["completion"])
+        self.assertEqual((stage / "completion-status.json").read_bytes(), expected)
+        self.assertEqual((first_stage / "completion-status.json").read_bytes(), first_bytes)
+        self.assertEqual(stat.S_IMODE((stage / "completion-status.json").stat().st_mode), 0o600)
+        self.assertFalse((stage / "round-status.json").exists())
+        terminal = dict(before)
+        terminal["complete-state.md"] = terminal.pop("methodology-analysis-state.md")
+        terminal.pop(".methodology-exit-reason")
         self.assertEqual(self.native_files(), terminal)
 
     def test_v2_main_stop_replays_original_completion_bytes_and_disposition(self):
