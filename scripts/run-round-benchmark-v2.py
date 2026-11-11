@@ -6,12 +6,14 @@ journals. The protected operation descriptor is provided before controller
 launch; this script cannot create one or grant a user disposition.
 """
 import argparse
+import ctypes
 import errno
 import fcntl
 import importlib.util
 import os
 from pathlib import Path
 import selectors
+import secrets
 import subprocess
 import sys
 
@@ -75,15 +77,50 @@ def run_fixed(path, limit):
         child.stderr.close()
 
 
+def rename_no_replace(fd, source, target):
+    libc = ctypes.CDLL(None, use_errno=True)
+    rename = getattr(libc, "renameat2", None)
+    if rename is None:
+        raise OSError(errno.ENOSYS, "native no-replace publication unavailable")
+    rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    rename.restype = ctypes.c_int
+    if rename(fd, os.fsencode(source), fd, os.fsencode(target), 1) != 0:
+        code = ctypes.get_errno()
+        raise OSError(code, os.strerror(code), target)
+
+
+def remove_owned_temporary(fd, name, handle):
+    try:
+        named = os.stat(name, dir_fd=fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    held = os.fstat(handle)
+    if (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino) or named.st_nlink != 1:
+        raise ValueError("native publication temporary identity changed")
+    os.unlink(name, dir_fd=fd)
+
+
 def publish(fs, fd, name, data):
     existing = fs.read(fd, name, len(data))
     if existing is not None:
         if existing != (data, 0o600):
             raise ValueError("native publication differs from the original operation")
+        os.fsync(fd)
         return
-    # An anonymous inode is never visible until the full bytes are durable.
-    # A killed controller leaves no named publication debris or hardlink alias.
-    handle = os.open(".", os.O_TMPFILE | os.O_WRONLY | os.O_CLOEXEC, 0o600, dir_fd=fd)
+    temporary = None
+    try:
+        handle = os.open(".", os.O_TMPFILE | os.O_WRONLY | os.O_CLOEXEC, 0o600, dir_fd=fd)
+    except OSError as error:
+        if error.errno not in (errno.EOPNOTSUPP, errno.ENOTSUP):
+            raise
+        # Some supported deployment filesystems lack anonymous inodes. The
+        # private temporary name is never a completed record or retry input.
+        # SIGKILL may leave it behind; no later publisher adopts or sweeps it.
+        name_before_publish = ".native-publication-" + secrets.token_hex(16)
+        handle = os.open(name_before_publish,
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+                         0o600, dir_fd=fd)
+        temporary = name_before_publish
     try:
         remaining = memoryview(data)
         while remaining:
@@ -94,15 +131,25 @@ def publish(fs, fd, name, data):
         os.fchmod(handle, 0o600)
         os.fsync(handle)
         try:
-            # dst_dir_fd selects linkat; following /proc/self/fd/N links the
-            # anonymous inode exactly once and never replaces an existing name.
-            os.link(f"/proc/self/fd/{handle}", name, dst_dir_fd=fd, follow_symlinks=True)
+            if temporary is None:
+                # The anonymous inode is linked once, without replacement.
+                os.link(f"/proc/self/fd/{handle}", name, dst_dir_fd=fd, follow_symlinks=True)
+            else:
+                rename_no_replace(fd, temporary, name)
         except FileExistsError:
             if fs.read(fd, name, len(data)) != (data, 0o600):
                 raise ValueError("native publication differs from the original operation")
+        if temporary is not None:
+            remove_owned_temporary(fd, temporary, handle)
+            temporary = None
         os.fsync(fd)
     finally:
-        os.close(handle)
+        try:
+            if temporary is not None:
+                remove_owned_temporary(fd, temporary, handle)
+                os.fsync(fd)
+        finally:
+            os.close(handle)
 
 
 def execute(args):
@@ -171,6 +218,9 @@ def execute(args):
             decoder.decode(stored[0], "completion")
             fs.verify_loop_inode(stage_fd, receipt_path.parent)
             fs.verify_loop_inode(loop_fd, loop)
+            # A prior publish may have reached rename but failed its directory
+            # fsync. Cached bytes alone must not turn that error into success.
+            os.fsync(stage_fd)
             # The hook sees exactly the bytes already committed by this
             # original operation. Retrying does not invoke the broker again.
             sys.stdout.buffer.write(stored[0])
@@ -196,6 +246,7 @@ def execute(args):
         value = decoder.decode(receipt[0], "round")
         fs.verify_loop_inode(stage_fd, receipt_path.parent)
         fs.verify_loop_inode(loop_fd, loop)
+        os.fsync(stage_fd)
         if value["decision"] in ("pause", "repair"):
             # A real pause or prepared owner repair must reach the main hook's
             # disposition. Neither branch publishes benchmark artifacts here.

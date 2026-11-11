@@ -4,6 +4,7 @@ No Node authorization, real benchmark, model, device, or release is tested.
 """
 import hashlib
 import errno
+import io
 import json
 import os
 from pathlib import Path
@@ -221,7 +222,8 @@ else:
         args = types.SimpleNamespace(completion=True, project_root=str(self.project),
                                      loop_dir=str(self.loop), round="2", command_file=str(self.command))
         with mock.patch.dict(os.environ, self.env, clear=True):
-            with mock.patch.object(module.os, "link", side_effect=OSError(errno.EIO, "completion link failure")):
+            with mock.patch.object(module.os, "link", side_effect=OSError(errno.EIO, "completion link failure")), \
+                    mock.patch.object(module, "rename_no_replace", side_effect=OSError(errno.EIO, "completion rename failure")):
                 with self.assertRaises(OSError) as error:
                     module.execute(args)
         self.assertEqual(error.exception.errno, errno.EIO)
@@ -232,6 +234,71 @@ else:
         self.assertEqual(retry.stdout, expected)
         self.assertEqual((self.stage / "completion-status.json").read_bytes(), expected)
         self.assertEqual(self.calls(), ["completion", "completion"])
+        self.assertEqual(self.native_files(), before)
+
+    def test_cached_completion_cannot_hide_directory_sync_failure_or_replay_callback(self):
+        expected = self.prepare_completion()
+        before = self.native_files()
+        module, _ = self.loaded_publisher()
+        args = types.SimpleNamespace(completion=True, project_root=str(self.project),
+                                     loop_dir=str(self.loop), round="2", command_file=str(self.command))
+        real_sync = os.fsync
+        stage = self.stage.stat()
+        output = types.SimpleNamespace(buffer=io.BytesIO())
+
+        def fail_stage_sync(handle):
+            held = os.fstat(handle)
+            if (held.st_dev, held.st_ino) == (stage.st_dev, stage.st_ino):
+                raise OSError(errno.EIO, "original stage directory cannot sync")
+            real_sync(handle)
+
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(module.os, "fsync", side_effect=fail_stage_sync), \
+                mock.patch.object(module.sys, "stdout", output):
+            with self.assertRaises(OSError):
+                module.execute(args)
+            self.assertEqual((self.stage / "completion-status.json").read_bytes(), expected)
+            with mock.patch.object(module, "run_fixed", side_effect=AssertionError("must not replay callback")):
+                with self.assertRaises(OSError):
+                    module.execute(args)
+        self.assertEqual(output.buffer.getvalue(), b"")
+        self.assertEqual(self.calls(), ["completion"])
+        retry = self.run_completion()
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(retry.stdout, expected)
+        self.assertEqual(self.calls(), ["completion"])
+        self.assertEqual(self.native_files(), before)
+
+    def test_cached_round_pause_cannot_hide_directory_sync_failure_or_replay_callback(self):
+        self.receipt.update(outcome="unmeasurable", decision="pause", reason_code="measurement_missing")
+        self.answer.write_text(json.dumps(self.receipt))
+        before = self.native_files()
+        module, _ = self.loaded_publisher()
+        args = types.SimpleNamespace(completion=False, project_root=str(self.project),
+                                     loop_dir=str(self.loop), round="2", command_file=str(self.command), timeout="5")
+        real_sync = os.fsync
+        stage = self.stage.stat()
+
+        def fail_receipt_sync(handle):
+            held = os.fstat(handle)
+            if ((held.st_dev, held.st_ino) == (stage.st_dev, stage.st_ino)
+                    and (self.stage / "round-status.json").exists()):
+                raise OSError(errno.EIO, "original receipt directory cannot sync")
+            real_sync(handle)
+
+        with mock.patch.dict(os.environ, self.env, clear=True), \
+                mock.patch.object(module.os, "fsync", side_effect=fail_receipt_sync):
+            with self.assertRaises(OSError):
+                module.execute(args)
+            self.assertEqual(json.loads((self.stage / "round-status.json").read_bytes()), self.receipt)
+            with mock.patch.object(module, "run_fixed", side_effect=AssertionError("must not replay callback")):
+                with self.assertRaises(OSError):
+                    module.execute(args)
+        self.assertEqual(self.calls(), ["benchmark", "round-status"])
+        self.assertEqual(self.native_files(), before)
+        retry = self.run_runner()
+        self.assertEqual(retry.returncode, 0, retry.stderr)
+        self.assertEqual(self.calls(), ["benchmark", "round-status"])
         self.assertEqual(self.native_files(), before)
 
     def tearDown(self):
