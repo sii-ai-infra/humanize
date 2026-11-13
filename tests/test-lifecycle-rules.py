@@ -1,12 +1,14 @@
 """Bounded DATA and real 590/new native-script differential components.
 
-No model/benchmark is run. Codex/validator are explicit fixed-output fixtures.
+No real model or performance benchmark is run. Codex/validator and the
+mandatory benchmark command are explicit fixed-output CPU fixtures.
 The old script bodies come from the pinned local Git object, never from the new
 matcher. These tests do not establish Node execution/approval or business E2E.
 """
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -111,7 +113,7 @@ class Rules(unittest.TestCase):
 printf '%s\\n' "$*" >> "$FIXTURE_CALLS"
 case " $* " in
   *" review "*) printf '%s\\n' "$FIXTURE_REVIEW" ;;
-  *" exec "*) cat >/dev/null; printf '%s\\n' "$FIXTURE_IMPLEMENTATION" ;;
+  *" exec "*) cat >/dev/null; printf '%s\\n' "$FIXTURE_IMPLEMENTATION" > "$FIXTURE_RESULT_FILE"; printf '%s\\n' "$FIXTURE_IMPLEMENTATION" ;;
   *" --version "*) printf '%s\\n' 'codex fixture-590-differential' ;;
   *) printf '%s\\n' 'fixture feature discovery' ;;
 esac
@@ -168,6 +170,7 @@ esac
         self.assertEqual(call(git+["init", "-q", "-b", "main"]).returncode, 0)
         (path/".gitignore").write_text(".humanize/\n.cache/\n")
         (path/"plan.md").write_text("# Original fixture plan\n\nKeep the original numerical definition.\n")
+        (path/"kernel.py").write_text("# Static dirty-tree fixture; never executed.\n")
         self.assertEqual(call(git+["add", "."]).returncode, 0)
         self.assertEqual(call(git+["-c", "user.email=fixture@invalid", "-c", "user.name=Fixture", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"]).returncode, 0)
         commit = call(git+["rev-parse", "HEAD"]).stdout.decode().strip()
@@ -181,6 +184,11 @@ esac
         (loop/"plan.md").write_bytes((path/"plan.md").read_bytes())
         (loop/f"round-{current}-summary.md").write_text("Completed the bounded fixture change.\n")
         (loop/"finalize-summary.md").write_text("Completed the fixed review cleanup.\n")
+        # Reach the original mandatory benchmark guard with an explicit CPU
+        # callback. The original runner writes its real result/log receipt;
+        # this is synthetic transition evidence, not a performance result.
+        (loop/"benchmark-command.sh").write_text("printf '%s\\n' 'synthetic CPU fixture, not performance evidence'; printf '%s\\n' benchmark >> .humanize/fixture-benchmark-calls\n")
+        (loop/"benchmark-timeout").write_text("10\n")
         if review: (loop/".review-phase-started").write_text(f"build_finish_round={current}\n")
         if methodology:
             (loop/"methodology-analysis-done.md").write_text("Done\n")
@@ -189,34 +197,41 @@ esac
         return loop
 
     def run_hook(self, bundle, project, implementation, review):
+        loop=project/".humanize/rlcr/2026-11-13_00-00-00"
+        active=next(loop/name for name in ("state.md","finalize-state.md","methodology-analysis-state.md") if (loop/name).exists())
+        current=next(line.split(":",1)[1].strip() for line in active.read_text().splitlines() if line.startswith("current_round:"))
         env = {"PATH":str(self.fixture_bin)+":/usr/bin:/bin", "LC_ALL":"C.UTF-8",
                "CLAUDE_PROJECT_DIR":str(project),"XDG_CACHE_HOME":str(project/".cache"),
                "FIXTURE_CALLS":str(project/".humanize/fixture-codex-calls"),
-               "FIXTURE_IMPLEMENTATION":implementation,"FIXTURE_REVIEW":review}
+               "FIXTURE_IMPLEMENTATION":implementation,"FIXTURE_REVIEW":review,
+               "FIXTURE_RESULT_FILE":str(loop/f"round-{current}-review-result.md")}
         return call(["bash", str(bundle/"hooks/loop-codex-stop-hook.sh")], cwd=project, env=env, data=b'{}')
 
     def comparable(self, value, root, bundle):
-        # The two copies have distinct private absolute roots; no state, stdout,
-        # timestamp, hash or semantic fields are otherwise removed or ignored.
-        return value.replace(str(root).encode(), b"<PROJECT>").replace(str(bundle).encode(), b"<BUNDLE>")
+        # Only exact private absolute roots and the original cache's literal
+        # sanitized-root derivative differ. No time/hash/semantic field is cut.
+        sanitized=re.sub(r"-+","-",re.sub(r"[^a-zA-Z0-9._-]","-",str(root)))
+        return value.replace(str(root).encode(),b"<PROJECT>").replace(str(bundle).encode(),b"<BUNDLE>").replace(sanitized.encode(),b"<PROJECT-CACHE-KEY>")
 
     def test_real_hook_original_590_and_new_differential(self):
+        # Last tuple: exact exec/review/synthetic-benchmark invocations. This
+        # prevents two equally early blocked runs being treated as equivalence.
         cases = [
-            ({"current":5,"maximum":5}, "maxiter-state.md", 5, "fixes", "No issues"),
-            ({"lifecycle":"finalize-state.md","current":5,"maximum":5,"review":True}, "complete-state.md", 5, "fixes", "No issues"),
-            ({"review":True,"current":5,"maximum":5}, "finalize-state.md", 5, "fixes", "No review issues"),
-            ({"review":True,"current":2}, "state.md", 3, "fixes", "[P1] Correct the fixture issue"),
-            ({"current":2}, "finalize-state.md", 2, "Mainline Progress Verdict: ADVANCED\nCOMPLETE", "No review issues"),
-            ({"current":2}, "state.md", 3, "Mainline Progress Verdict: ADVANCED\nOriginal review requires fixes", "No issues"),
-            ({"lifecycle":"finalize-state.md","privacy":False}, "methodology-analysis-state.md", 2, "fixes", "No issues"),
-            ({"lifecycle":"methodology-analysis-state.md","methodology":"complete"}, "complete-state.md", 2, "fixes", "No issues"),
-            ({"lifecycle":"methodology-analysis-state.md","methodology":"stop"}, "stop-state.md", 2, "fixes", "No issues"),
-            ({"lifecycle":"methodology-analysis-state.md","methodology":"maxiter"}, "maxiter-state.md", 2, "fixes", "No issues"),
+            ({"current":5,"maximum":5}, "maxiter-state.md", 5, "fixes", "No issues", (0,0,0)),
+            ({"lifecycle":"finalize-state.md","current":5,"maximum":5,"review":True}, "complete-state.md", 5, "fixes", "No issues", (0,0,0)),
+            ({"review":True,"current":5,"maximum":5}, "finalize-state.md", 5, "fixes", "No review issues", (0,1,1)),
+            ({"review":True,"current":2}, "state.md", 3, "fixes", "[P1] Correct the fixture issue", (0,1,1)),
+            ({"current":2}, "finalize-state.md", 2, "Mainline Progress Verdict: ADVANCED\nCOMPLETE", "No review issues", (1,1,1)),
+            ({"current":2}, "state.md", 3, "Mainline Progress Verdict: ADVANCED\nOriginal review requires fixes", "No issues", (1,0,1)),
+            ({"lifecycle":"finalize-state.md","privacy":False}, "methodology-analysis-state.md", 2, "fixes", "No issues", (0,0,0)),
+            ({"lifecycle":"methodology-analysis-state.md","methodology":"complete"}, "complete-state.md", 2, "fixes", "No issues", (0,0,0)),
+            ({"lifecycle":"methodology-analysis-state.md","methodology":"stop"}, "stop-state.md", 2, "fixes", "No issues", (0,0,0)),
+            ({"lifecycle":"methodology-analysis-state.md","methodology":"maxiter"}, "maxiter-state.md", 2, "fixes", "No issues", (0,0,0)),
             # The existing earlier schema guard blocks absent base_branch. Do
             # not bypass it just to make the later skip-review row reachable.
-            ({"base":""}, "state.md", 2, "Mainline Progress Verdict: ADVANCED\nCOMPLETE", "No issues"),
+            ({"base":""}, "state.md", 2, "Mainline Progress Verdict: ADVANCED\nCOMPLETE", "No issues", (0,0,0)),
         ]
-        for fields, target, round_after, implementation, review in cases:
+        for fields, target, round_after, implementation, review, expected_calls in cases:
             with self.subTest(fields=fields):
                 d=self.temporary(); source=d/"seed"; self.hook_fixture(source, **fields)
                 old=d/"old"; new=d/"new"; shutil.copytree(source,old);shutil.copytree(source,new)
@@ -225,14 +240,90 @@ esac
                     proc=self.run_hook(bundle,project,implementation,review)
                     results.append((proc.returncode,self.comparable(proc.stdout,project,bundle),self.comparable(proc.stderr,project,bundle)))
                     loop=project/".humanize/rlcr/2026-11-13_00-00-00"
-                    self.assertTrue((loop/target).is_file(), proc.stderr.decode())
-                    self.assertIn(f"current_round: {round_after}\n".encode(),(loop/target).read_bytes())
+                    diagnostic=f"bundle={bundle}\nstdout={proc.stdout.decode(errors='replace')}\nstderr={proc.stderr.decode(errors='replace')}"
+                    self.assertEqual(proc.returncode,0,diagnostic)
+                    self.assertTrue((loop/target).is_file(),diagnostic)
+                    self.assertIn(f"current_round: {round_after}\n".encode(),(loop/target).read_bytes(),diagnostic)
+                    calls_path=project/".humanize/fixture-codex-calls"
+                    calls=calls_path.read_text().splitlines() if calls_path.exists() else []
+                    benchmark_path=project/".humanize/fixture-benchmark-calls"
+                    benchmarks=benchmark_path.read_text().splitlines() if benchmark_path.exists() else []
+                    observed=(sum("exec" in line.split() for line in calls),sum("review" in line.split() for line in calls),len(benchmarks))
+                    self.assertEqual(observed,expected_calls,diagnostic)
+                    if expected_calls[2]:
+                        self.assertEqual(benchmarks,["benchmark"])
+                        evidence=(loop/f"round-{fields.get('current',2)}-benchmark.md").read_text()
+                        self.assertIn("- Status: **passed**",evidence)
+                        self.assertIn("synthetic CPU fixture, not performance evidence",(loop/f"round-{fields.get('current',2)}-benchmark.log").read_text())
                     trees.append({name:(self.comparable(raw,project,bundle),mode) for name,(raw,mode) in files(loop).items()})
                 self.assertEqual(results[0],results[1]); self.assertEqual(trees[0],trees[1])
                 calls=lambda p:(p/".humanize/fixture-codex-calls").read_text() if (p/".humanize/fixture-codex-calls").exists() else ""
                 self.assertEqual(self.comparable(calls(old).encode(),old,self.old),
                                  self.comparable(calls(new).encode(),new,ROOT),
                                  "no additional model/benchmark invocation")
+
+    def test_real_methodology_entry_priority_original_590_differential(self):
+        # These expected return values and messages come from the 590 library,
+        # including its intentional non-trimming nonempty-done entry check.
+        cases=[(True,True,"done",17,"privacy mode enabled"),
+               (False,True,"done",17,"already active"),
+               (False,False,"done",17,"already completed"),
+               (False,False,"  ",17,"already completed"),
+               (False,False,"",0,"State file renamed")]
+        for privacy,active,done,expected_exit,message in cases:
+            with self.subTest(privacy=privacy,active=active,done=repr(done)):
+                d=self.temporary();results=[];trees=[]
+                for label,bundle in (("old",self.old),("new",ROOT)):
+                    loop=d/label;loop.mkdir()
+                    (loop/"finalize-state.md").write_text("---\ncurrent_round: 2\nmax_iterations: 5\n---\nOriginal body\n")
+                    if active:(loop/"methodology-analysis-state.md").write_text("Existing active phase\n")
+                    (loop/"methodology-analysis-done.md").write_text(done)
+                    before=files(loop)
+                    init='source "$1/hooks/lib/lifecycle-rules.sh"; lifecycle_rules_init;' if label=="new" else ''
+                    script='set -euo pipefail; PLUGIN_ROOT="$1";source "$1/hooks/lib/loop-common.sh"; '+init+' source "$1/hooks/lib/methodology-analysis.sh";LOOP_DIR="$2";STATE_FILE="$2/finalize-state.md";CURRENT_ROUND=2;MAX_ITERATIONS=5;PRIVACY_MODE="$3";if enter_methodology_analysis_phase complete "Original completion";then exit 0;else exit 17;fi'
+                    proc=call(["bash","--noprofile","--norc","-c",script,"fixture",str(bundle),str(loop),str(privacy).lower()])
+                    diagnostic=proc.stdout.decode(errors="replace")+proc.stderr.decode(errors="replace")
+                    self.assertEqual(proc.returncode,expected_exit,diagnostic)
+                    self.assertIn(message,proc.stderr.decode())
+                    if expected_exit==17:
+                        self.assertEqual(files(loop),before)
+                        self.assertEqual(proc.stdout,b"")
+                    else:
+                        self.assertFalse((loop/"finalize-state.md").exists())
+                        self.assertEqual((loop/"methodology-analysis-state.md").read_bytes(),before["finalize-state.md"][0])
+                        self.assertEqual((loop/".methodology-exit-reason").read_text(),"complete\n")
+                        self.assertEqual(json.loads(proc.stdout)["decision"],"block")
+                    results.append((proc.returncode,self.comparable(proc.stdout,loop,bundle),self.comparable(proc.stderr,loop,bundle)))
+                    trees.append({name:(self.comparable(raw,loop,bundle),mode) for name,(raw,mode) in files(loop).items()})
+                self.assertEqual(results[0],results[1]);self.assertEqual(trees[0],trees[1])
+
+    def test_real_methodology_completion_rejects_dirty_or_missing_report_without_transition(self):
+        for issue in ("dirty","missing-report","empty-report","empty-done","missing-exit","invalid-exit"):
+            with self.subTest(issue=issue):
+                d=self.temporary();seed=d/"seed"
+                loop=self.hook_fixture(seed,lifecycle="methodology-analysis-state.md",review=True,privacy=False,methodology="complete")
+                if issue=="dirty":(seed/"kernel.py").write_text("# Uncommitted static fixture edit.\n")
+                elif issue=="missing-report":(loop/"methodology-analysis-report.md").unlink()
+                elif issue=="empty-report":(loop/"methodology-analysis-report.md").write_text("  \n")
+                elif issue=="empty-done":(loop/"methodology-analysis-done.md").write_text("  \n")
+                elif issue=="missing-exit":(loop/".methodology-exit-reason").unlink()
+                else:(loop/".methodology-exit-reason").write_text("not-a-native-terminal\n")
+                results=[];trees=[]
+                for label,bundle in (("old",self.old),("new",ROOT)):
+                    project=d/label;shutil.copytree(seed,project)
+                    loop=project/".humanize/rlcr/2026-11-13_00-00-00";before=files(loop)
+                    proc=self.run_hook(bundle,project,"must not run","must not run")
+                    diagnostic=proc.stdout.decode(errors="replace")+proc.stderr.decode(errors="replace")
+                    self.assertEqual(proc.returncode,0,diagnostic)
+                    value=json.loads(proc.stdout);self.assertEqual(value["decision"],"block")
+                    if issue=="dirty":self.assertIn("uncommitted changes detected after methodology",value["systemMessage"])
+                    else:self.assertIn("Methodology Analysis Incomplete",value["reason"])
+                    self.assertEqual(files(loop),before)
+                    self.assertFalse((project/".humanize/fixture-codex-calls").exists())
+                    self.assertFalse((project/".humanize/fixture-benchmark-calls").exists())
+                    results.append((proc.returncode,self.comparable(proc.stdout,project,bundle),self.comparable(proc.stderr,project,bundle)))
+                    trees.append(files(loop))
+                self.assertEqual(results[0],results[1]);self.assertEqual(trees[0],trees[1])
 
     def test_real_private_prepare_and_live_repair_original_590_differential(self):
         for current,maximum in ((2,5),(5,5),(999999999999999998,999999999999999999),(999999999999999999,999999999999999999)):
