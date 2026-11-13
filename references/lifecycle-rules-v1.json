@@ -1,0 +1,220 @@
+{
+  "schema": "humanize-lifecycle-rules-v1",
+  "node_observe": {
+    "mode": "shadow",
+    "enabled_rule_ids": [
+      "node_outcome.complete_exit0",
+      "node_outcome.maxiter_exit0",
+      "node_outcome.state_exit0",
+      "node_outcome.state_exit10",
+      "node_outcome.finalize_exit0",
+      "node_outcome.finalize_exit10",
+      "node_outcome.methodology_exit0",
+      "node_outcome.methodology_exit10",
+      "node_outcome.other",
+      "node_round.same",
+      "node_round.next",
+      "node_round.outside"
+    ]
+  },
+  "records": [
+    {
+      "site": "budget_precheck",
+      "case": "implementation_within",
+      "rule_id": "budget_precheck.implementation_within",
+      "result": "proceed"
+    },
+    {
+      "site": "budget_precheck",
+      "case": "implementation_beyond",
+      "rule_id": "budget_precheck.implementation_beyond",
+      "result": "request_maxiter"
+    },
+    {
+      "site": "budget_precheck",
+      "case": "review_within",
+      "rule_id": "budget_precheck.review_within",
+      "result": "proceed"
+    },
+    {
+      "site": "budget_precheck",
+      "case": "review_beyond",
+      "rule_id": "budget_precheck.review_beyond",
+      "result": "proceed"
+    },
+    {
+      "site": "budget_precheck",
+      "case": "finalize_within",
+      "rule_id": "budget_precheck.finalize_within",
+      "result": "proceed"
+    },
+    {
+      "site": "budget_precheck",
+      "case": "finalize_beyond",
+      "rule_id": "budget_precheck.finalize_beyond",
+      "result": "proceed"
+    },
+    {
+      "site": "implementation_complete",
+      "case": "at_or_above",
+      "rule_id": "implementation_complete.at_or_above",
+      "result": "request_maxiter"
+    },
+    {
+      "site": "implementation_complete",
+      "case": "below_with_base",
+      "rule_id": "implementation_complete.below_with_base",
+      "result": "enter_review"
+    },
+    {
+      "site": "implementation_complete",
+      "case": "below_without_base",
+      "rule_id": "implementation_complete.below_without_base",
+      "result": "skip_review"
+    },
+    {
+      "site": "enter_finalize",
+      "case": "review_passed",
+      "rule_id": "enter_finalize.review_passed",
+      "result": "finalize_same_round"
+    },
+    {
+      "site": "review_issues",
+      "case": "issues_present",
+      "rule_id": "review_issues.issues_present",
+      "result": "review_next_round"
+    },
+    {
+      "site": "implementation_issues",
+      "case": "continue",
+      "rule_id": "implementation_issues.continue",
+      "result": "implementation_next_round"
+    },
+    {
+      "site": "methodology_enter",
+      "case": "privacy",
+      "rule_id": "methodology_enter.privacy",
+      "result": "skip_privacy"
+    },
+    {
+      "site": "methodology_enter",
+      "case": "already_active",
+      "rule_id": "methodology_enter.already_active",
+      "result": "skip_already_active"
+    },
+    {
+      "site": "methodology_enter",
+      "case": "nonempty_done",
+      "rule_id": "methodology_enter.nonempty_done",
+      "result": "skip_nonempty_done"
+    },
+    {
+      "site": "methodology_enter",
+      "case": "enter",
+      "rule_id": "methodology_enter.enter",
+      "result": "enter_methodology_same_round"
+    },
+    {
+      "site": "methodology_finish",
+      "case": "complete",
+      "rule_id": "methodology_finish.complete",
+      "result": "complete_same_round"
+    },
+    {
+      "site": "methodology_finish",
+      "case": "stop",
+      "rule_id": "methodology_finish.stop",
+      "result": "stop_same_round"
+    },
+    {
+      "site": "methodology_finish",
+      "case": "maxiter",
+      "rule_id": "methodology_finish.maxiter",
+      "result": "maxiter_same_round"
+    },
+    {
+      "site": "completion_repair",
+      "case": "within",
+      "rule_id": "completion_repair.within",
+      "result": "repair_next_round"
+    },
+    {
+      "site": "completion_repair",
+      "case": "beyond",
+      "rule_id": "completion_repair.beyond",
+      "result": "maxiter_same_round"
+    },
+    {
+      "site": "node_outcome",
+      "case": "complete_exit0",
+      "rule_id": "node_outcome.complete_exit0",
+      "result": "complete"
+    },
+    {
+      "site": "node_outcome",
+      "case": "maxiter_exit0",
+      "rule_id": "node_outcome.maxiter_exit0",
+      "result": "limit_reached"
+    },
+    {
+      "site": "node_outcome",
+      "case": "state_exit0",
+      "rule_id": "node_outcome.state_exit0",
+      "result": "continue"
+    },
+    {
+      "site": "node_outcome",
+      "case": "state_exit10",
+      "rule_id": "node_outcome.state_exit10",
+      "result": "continue"
+    },
+    {
+      "site": "node_outcome",
+      "case": "finalize_exit0",
+      "rule_id": "node_outcome.finalize_exit0",
+      "result": "continue"
+    },
+    {
+      "site": "node_outcome",
+      "case": "finalize_exit10",
+      "rule_id": "node_outcome.finalize_exit10",
+      "result": "continue"
+    },
+    {
+      "site": "node_outcome",
+      "case": "methodology_exit0",
+      "rule_id": "node_outcome.methodology_exit0",
+      "result": "continue"
+    },
+    {
+      "site": "node_outcome",
+      "case": "methodology_exit10",
+      "rule_id": "node_outcome.methodology_exit10",
+      "result": "continue"
+    },
+    {
+      "site": "node_outcome",
+      "case": "other",
+      "rule_id": "node_outcome.other",
+      "result": "error"
+    },
+    {
+      "site": "node_round",
+      "case": "same",
+      "rule_id": "node_round.same",
+      "result": "accept"
+    },
+    {
+      "site": "node_round",
+      "case": "next",
+      "rule_id": "node_round.next",
+      "result": "accept"
+    },
+    {
+      "site": "node_round",
+      "case": "outside",
+      "rule_id": "node_round.outside",
+      "result": "reject"
+    }
+  ]
+}

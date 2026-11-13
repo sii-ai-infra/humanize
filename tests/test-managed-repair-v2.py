@@ -92,6 +92,9 @@ class RepairTests(unittest.TestCase):
         script = '''set -euo pipefail
 umask 077
 source "$1/hooks/lib/loop-common.sh"
+PLUGIN_ROOT="$1"
+source "$1/hooks/lib/lifecycle-rules.sh"
+lifecycle_rules_init
 source "$1/hooks/lib/managed-completion.sh"
 LOOP_DIR="$2"; STATE_FILE="$2/$3"; CURRENT_ROUND="$4"; MAX_ITERATIONS="$5"
 export HUMANIZE_MANAGED_RELIABILITY_V1=1 HUMANIZE_COMPLETION_VALIDATOR="$6"

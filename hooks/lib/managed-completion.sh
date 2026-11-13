@@ -24,7 +24,10 @@ managed_completion_validation() {
         return 1
     fi
     next=$((CURRENT_ROUND + 1))
-    if [[ $next -gt $MAX_ITERATIONS ]]; then
+    local rule_case=within
+    [[ $next -le $MAX_ITERATIONS ]] || rule_case=beyond
+    lifecycle_rule_or_block completion_repair "$rule_case"
+    if [[ "$LIFECYCLE_RESULT" == maxiter_same_round ]]; then
         # The negative validation is real; exhausted work cannot become success.
         # Do not reopen methodology with a stale COMPLETE exit reason.
         mv "$STATE_FILE" "$LOOP_DIR/maxiter-state.md"

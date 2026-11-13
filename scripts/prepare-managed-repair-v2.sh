@@ -5,6 +5,8 @@ set -euo pipefail
 umask 077
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$PLUGIN_ROOT/hooks/lib/loop-common.sh"
+source "$PLUGIN_ROOT/hooks/lib/lifecycle-rules.sh" || exit 2
+lifecycle_rules_init || exit 2
 LOOP_DIR="$1"
 STATE_FILE="$LOOP_DIR/$2"
 EXPECTED_ROUND="$3"
@@ -26,7 +28,10 @@ reason=$(jq -r .reason < "$RECEIPT_FILE")
 # This is the original managed-completion repair body, on private files.
 # Keep stdout and flag differences between the two branches intentional.
 next=$((CURRENT_ROUND + 1))
-if [[ $next -gt $MAX_ITERATIONS ]]; then
+_rules_repair=within
+[[ $next -le $MAX_ITERATIONS ]] || _rules_repair=beyond
+lifecycle_rule completion_repair "$_rules_repair" || exit 2
+if [[ "$LIFECYCLE_RESULT" == maxiter_same_round ]]; then
     mv "$STATE_FILE" "$LOOP_DIR/maxiter-state.md"
     rm -f "$LOOP_DIR/.methodology-exit-reason"
     printf '%s\n' "$reason" > "$LOOP_DIR/round-${CURRENT_ROUND}-completion-blocked.md"

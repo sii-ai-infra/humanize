@@ -99,6 +99,16 @@ if [[ -z "$LOOP_DIR" ]]; then
     exit 0
 fi
 
+# Resolve every finite rule before any active-loop state/marker mutation.
+if [[ ! -f "$SCRIPT_DIR/lib/lifecycle-rules.sh" || -L "$SCRIPT_DIR/lib/lifecycle-rules.sh" ]] || ! source "$SCRIPT_DIR/lib/lifecycle-rules.sh"; then
+    printf '%s\n' '{"decision":"block","reason":"Lifecycle rules are unavailable; preserve the current lifecycle and request platform recovery.","systemMessage":"Lifecycle rules are unavailable","platform_blocked":true}'
+    exit 0
+fi
+if ! lifecycle_rules_init; then
+    lifecycle_rules_block
+    exit 0
+fi
+
 # ========================================
 # Background-Task Guards
 # ========================================
@@ -698,6 +708,8 @@ Please commit all changes before allowing the loop to exit.
             managed_completion_validation || exit 0
         fi
         if [[ -n "$_meth_exit_reason" ]]; then
+            lifecycle_rule_or_block methodology_finish "$_meth_exit_reason"
+            [[ "$LIFECYCLE_RESULT" == "${_meth_exit_reason}_same_round" ]] || { lifecycle_rules_block; exit 0; }
             mv "$LOOP_DIR/methodology-analysis-state.md" "$LOOP_DIR/${_meth_exit_reason}-state.md" 2>/dev/null || true
             rm -f "$LOOP_DIR/.methodology-exit-reason"
             echo "Methodology analysis complete. State preserved as: $LOOP_DIR/${_meth_exit_reason}-state.md" >&2
@@ -1009,7 +1021,13 @@ NEXT_ROUND=$((CURRENT_ROUND + 1))
 # Skip max iterations check in Finalize Phase or Review Phase
 # - Finalize Phase: already received COMPLETE from codex
 # - Review Phase: must continue until [P?] issues are cleared, regardless of iteration count
-if [[ "$IS_FINALIZE_PHASE" != "true" ]] && [[ "$REVIEW_STARTED" != "true" ]] && [[ $NEXT_ROUND -gt $MAX_ITERATIONS ]]; then
+_rules_phase=implementation
+[[ "$REVIEW_STARTED" != true ]] || _rules_phase=review
+[[ "$IS_FINALIZE_PHASE" != true ]] || _rules_phase=finalize
+_rules_budget=within
+[[ $NEXT_ROUND -le $MAX_ITERATIONS ]] || _rules_budget=beyond
+lifecycle_rule_or_block budget_precheck "${_rules_phase}_${_rules_budget}"
+if [[ "$LIFECYCLE_RESULT" == request_maxiter ]]; then
     echo "RLCR loop did not complete, but reached max iterations ($MAX_ITERATIONS). Exiting." >&2
     # Try to enter methodology analysis phase before final exit
     if enter_methodology_analysis_phase "maxiter" "Reached max iterations ($MAX_ITERATIONS) without completion"; then
@@ -1475,6 +1493,8 @@ run_and_handle_code_review() {
 enter_finalize_phase() {
     local skip_reason="$1"
     local system_msg="$2"
+    lifecycle_rule_or_block enter_finalize review_passed
+    [[ "$LIFECYCLE_RESULT" == finalize_same_round ]] || { lifecycle_rules_block; exit 0; }
 
     mv "$STATE_FILE" "$LOOP_DIR/finalize-state.md"
     echo "State file renamed to: $LOOP_DIR/finalize-state.md" >&2
@@ -1650,6 +1670,8 @@ Files:
 continue_review_loop_with_issues() {
     local round="$1"
     local review_content="$2"
+    lifecycle_rule_or_block review_issues issues_present
+    [[ "$LIFECYCLE_RESULT" == review_next_round ]] || { lifecycle_rules_block; exit 0; }
 
     echo "Code review found issues. Continuing review loop..." >&2
 
@@ -2023,8 +2045,14 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
         # Fall through to continue with codex review logic below
     else
         # Implementation phase complete - transition to review phase
-        # Max iterations check
-        if [[ $CURRENT_ROUND -ge $MAX_ITERATIONS ]]; then
+        # This is the distinct current-round budget guard, not next-round.
+        _rules_complete=at_or_above
+        if [[ $CURRENT_ROUND -lt $MAX_ITERATIONS ]]; then
+            _rules_complete=below_without_base
+            [[ -z "$BASE_BRANCH" ]] || _rules_complete=below_with_base
+        fi
+        lifecycle_rule_or_block implementation_complete "$_rules_complete"
+        if [[ "$LIFECYCLE_RESULT" == request_maxiter ]]; then
             echo "Codex review passed but at max iterations ($MAX_ITERATIONS). Terminating as MAXITER." >&2
             if enter_methodology_analysis_phase "maxiter" "Codex confirmed COMPLETE but at max iterations ($MAX_ITERATIONS)"; then
                 exit 0
@@ -2038,7 +2066,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
         REVIEW_SKIP_REASON=""
 
         # Check if base_branch is available for code review
-        if [[ -z "$BASE_BRANCH" ]]; then
+        if [[ "$LIFECYCLE_RESULT" == skip_review ]]; then
             echo "Warning: No base_branch configured, skipping code review phase." >&2
             REVIEW_SKIPPED="true"
             REVIEW_SKIP_REASON="No base_branch configured for code review"
@@ -2140,6 +2168,9 @@ fi
 # ========================================
 # Review Found Issues - Continue Loop
 # ========================================
+
+lifecycle_rule_or_block implementation_issues continue
+[[ "$LIFECYCLE_RESULT" == implementation_next_round ]] || { lifecycle_rules_block; exit 0; }
 
 # Update state file for next round
 upsert_state_fields "$STATE_FILE" \

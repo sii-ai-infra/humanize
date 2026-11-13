@@ -39,27 +39,37 @@ enter_methodology_analysis_phase() {
     local exit_reason="$1"
     local exit_reason_description="$2"
 
+    # Preserve original privacy/active/done priority. The table was loaded
+    # once by the stop hook before any lifecycle mutation.
+    local rule_case=enter done_content=""
+    if [[ "$PRIVACY_MODE" == true ]]; then
+        rule_case=privacy
+    elif [[ -f "$LOOP_DIR/methodology-analysis-state.md" ]]; then
+        rule_case=already_active
+    elif [[ -f "$LOOP_DIR/methodology-analysis-done.md" ]]; then
+        done_content=$(cat "$LOOP_DIR/methodology-analysis-done.md" 2>/dev/null || echo "")
+        [[ -z "$done_content" ]] || rule_case=nonempty_done
+    fi
+    lifecycle_rule_or_block methodology_enter "$rule_case"
+
     # Skip if privacy mode is on
-    if [[ "$PRIVACY_MODE" == "true" ]]; then
+    if [[ "$LIFECYCLE_RESULT" == skip_privacy ]]; then
         echo "Methodology analysis skipped (privacy mode enabled)" >&2
         return 1
     fi
 
     # Prevent re-entry: if methodology-analysis-state.md already exists, skip
-    if [[ -f "$LOOP_DIR/methodology-analysis-state.md" ]]; then
+    if [[ "$LIFECYCLE_RESULT" == skip_already_active ]]; then
         echo "Methodology analysis phase already active, skipping re-entry" >&2
         return 1
     fi
 
     # Skip if already completed in a previous attempt
-    if [[ -f "$LOOP_DIR/methodology-analysis-done.md" ]]; then
-        local done_content
-        done_content=$(cat "$LOOP_DIR/methodology-analysis-done.md" 2>/dev/null || echo "")
-        if [[ -n "$done_content" ]]; then
-            echo "Methodology analysis already completed, skipping" >&2
-            return 1
-        fi
+    if [[ "$LIFECYCLE_RESULT" == skip_nonempty_done ]]; then
+        echo "Methodology analysis already completed, skipping" >&2
+        return 1
     fi
+    [[ "$LIFECYCLE_RESULT" == enter_methodology_same_round ]] || { lifecycle_rules_block; exit 0; }
 
     # Rename current state file to methodology-analysis-state.md
     mv "$STATE_FILE" "$LOOP_DIR/methodology-analysis-state.md"
